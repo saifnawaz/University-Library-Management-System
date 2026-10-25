@@ -38,3 +38,15 @@ class PermissionDenied(LibraryException):
     """Raised when a user tries an action their role is not allowed to do."""
 
     default_message = "You do not have permission to do this."
+
+
+class OverdueLoans(LibraryException):
+    """Raised when a member with an overdue item tries to borrow, even with no fines yet."""
+
+    default_message = "You have overdue items. Please return them before borrowing."
+
+
+class NotFound(LibraryException):
+    """Raised when an item, user or loan id does not exist."""
+
+    default_message = "Not found."

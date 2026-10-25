@@ -144,6 +144,10 @@ class LibraryItem(ABC):
         """Return True if at least one copy is free."""
         return self._available_copies > 0
 
+    def has_unlimited_copies(self) -> bool:
+        """Return True if copies never run out (e-books)."""
+        return False
+
     # ---- copy bookkeeping (called by Library, not by routes) ----
 
     def checkout_copy(self) -> None:
@@ -270,6 +274,9 @@ class EBook(LibraryItem):
 
     def is_available(self) -> bool:
         return True  # unlimited copies
+
+    def has_unlimited_copies(self) -> bool:
+        return True
 
     def checkout_copy(self) -> None:
         pass  # nothing to count

@@ -6,9 +6,10 @@ import hashlib
 import hmac
 import os
 from abc import ABC, abstractmethod
+from datetime import date
 from typing import TYPE_CHECKING
 
-from exceptions import LimitExceeded, UnpaidFines
+from exceptions import LibraryException, LimitExceeded, OverdueLoans, UnpaidFines
 from services.fine_policy import FacultyFinePolicy, FinePolicy, StudentFinePolicy
 
 if TYPE_CHECKING:
@@ -107,6 +108,7 @@ class Member(User):
         self._loans: list[Loan] = []    # items currently borrowed
         self._history: list[Loan] = []  # loans already returned
         self._fines: float = 0.0        # unpaid fine balance
+        self._notifications: list[str] = []  # messages from NotificationCenter
 
     # ---- properties ----
 
@@ -124,6 +126,11 @@ class Member(User):
     def fines(self) -> float:
         """Unpaid fine balance (read-only; use add_fine / pay_fine)."""
         return self._fines
+
+    @property
+    def notifications(self) -> list[str]:
+        """Messages received, oldest first. Returns a copy."""
+        return list(self._notifications)
 
     # ---- abstract rules each member type must define ----
 
@@ -145,23 +152,41 @@ class Member(User):
 
     # ---- borrowing rules ----
 
-    def check_can_borrow(self) -> None:
-        """Raise UnpaidFines or LimitExceeded if this member may not borrow right now."""
+    def check_can_borrow(self, today: date | None = None) -> None:
+        """Raise UnpaidFines, OverdueLoans or LimitExceeded if this member may not borrow now."""
         if self._fines > self.FINE_BLOCK_THRESHOLD:
-            raise UnpaidFines(f"{self.name} has unpaid fines of {self._fines:.2f}.")
+            raise UnpaidFines(f"{self.name} has unpaid fines of Rs {self._fines:g}.")
+        overdue = [loan for loan in self._loans if loan.is_overdue(today)]
+        if overdue:
+            # Checked separately from fines: the fine is only added on return,
+            # so an overdue item still out shows a balance of 0.
+            raise OverdueLoans(
+                f"{self.name} has {len(overdue)} overdue item(s). "
+                "Please return them before borrowing."
+            )
         if len(self._loans) >= self.get_borrow_limit():
             raise LimitExceeded(
                 f"{self.name} already has {len(self._loans)} of "
                 f"{self.get_borrow_limit()} allowed items."
             )
 
-    def can_borrow(self) -> bool:
+    def can_borrow(self, today: date | None = None) -> bool:
         """Return True if this member may borrow another item right now."""
         try:
-            self.check_can_borrow()
+            self.check_can_borrow(today)
             return True
-        except (UnpaidFines, LimitExceeded):
+        except LibraryException:
             return False
+
+    def has_loan_of(self, item_id: str) -> bool:
+        """Return True if this member currently has this item on loan."""
+        return any(loan.item.item_id == item_id for loan in self._loans)
+
+    # ---- notifications (Observer side) ----
+
+    def receive_notification(self, message: str) -> None:
+        """Called by NotificationCenter when something this member waits for happens."""
+        self._notifications.append(message)
 
     # ---- loan and fine bookkeeping (called by Library, not by routes) ----
 

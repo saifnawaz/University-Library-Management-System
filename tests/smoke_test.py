@@ -5,11 +5,23 @@ Run from the project root:  python -m tests.smoke_test
 
 from datetime import date, datetime, timedelta
 
-from exceptions import ItemNotAvailable, LibraryException, LimitExceeded, UnpaidFines
+from exceptions import (ItemNotAvailable, LibraryException, LimitExceeded, NotFound,
+                        OverdueLoans, PermissionDenied, UnpaidFines)
 from models import (Book, EBook, Faculty, Librarian, LibraryItem, Loan, Magazine, Member,
                     ReferenceBook, Reservation, Student, Thesis, User)
 from services.fine_policy import FacultyFinePolicy, FinePolicy, StudentFinePolicy
 from services.item_factory import ItemFactory
+from services.library import Library
+from services.notification_center import NotificationCenter
+
+
+def _expect(exc_type: type[Exception], fn, *args, **kwargs) -> Exception:
+    """Call fn and check it raises exc_type; return the exception."""
+    try:
+        fn(*args, **kwargs)
+    except exc_type as e:
+        return e
+    raise AssertionError(f"expected {exc_type.__name__}")
 
 
 # ---------- Phase 1: users ----------
@@ -313,6 +325,168 @@ def test_reservations_sort_into_waitlist_order() -> None:
     waitlist = sorted([third, first, second])
     assert [r.member.user_id for r in waitlist] == ["F1", "S3", "S1"]
     assert Reservation(a, book).created_at <= datetime.now()
+
+
+# ---------- Phase 4: Library + NotificationCenter ----------
+
+def _library() -> tuple[Library, Librarian, Student, Faculty]:
+    """A fresh library with one librarian, student, faculty member and a few items."""
+    Library.reset()
+    lib = Library()
+    staff = Librarian("L1", "Sara", User.hash_password("pw"))
+    s = Student("S1", "Ali", User.hash_password("pw"))
+    f = Faculty("F1", "Dr. Khan", User.hash_password("pw"))
+    for u in (staff, s, f):
+        lib.add_user(u)
+    for data in (
+        {"type": "book", "item_id": "B1", "title": "Clean Code", "author": "Robert Martin",
+         "year": 2008, "subject": "Software Engineering", "total_copies": 1},
+        {"type": "book", "item_id": "B2", "title": "Deep Learning", "author": "Ian Goodfellow",
+         "year": 2016, "subject": "Machine Learning", "total_copies": 3},
+        {"type": "reference", "item_id": "R1", "title": "Oxford Dictionary",
+         "author": "Oxford", "year": 2010, "total_copies": 2},
+        {"type": "ebook", "item_id": "E1", "title": "Python Basics", "author": "Ann Lee",
+         "year": 2021, "subject": "Programming"},
+        {"type": "magazine", "item_id": "M1", "title": "Nature", "author": "Springer",
+         "year": 2026},
+        {"type": "thesis", "item_id": "T1", "title": "Graph Search", "author": "Omar",
+         "year": 2024, "supervisor": "Dr. Rahman"},
+    ):
+        lib.add_item(staff, ItemFactory.create(data))
+    return lib, staff, s, f
+
+
+def test_library_is_singleton() -> None:
+    lib, *_ = _library()
+    assert Library() is lib
+    assert len(Library().all_items()) == 6  # __init__ ran again but did not wipe data
+
+
+def test_issue_due_date_is_shorter_of_member_and_item() -> None:
+    lib, staff, s, f = _library()
+    today = date(2026, 10, 1)
+    assert lib.issue(staff, "S1", "B2", today).due_date == today + timedelta(days=14)
+    assert lib.issue(staff, "F1", "B2", today).due_date == today + timedelta(days=30)
+    assert lib.issue(staff, "F1", "M1", today).due_date == today + timedelta(days=7)
+    assert lib.get_item("B2").available_copies == 1
+
+
+def test_issue_checks_permissions() -> None:
+    lib, staff, s, f = _library()
+    _expect(PermissionDenied, lib.issue, staff, "S1", "R1")       # reference book
+    _expect(PermissionDenied, lib.issue, staff, "S1", "T1")       # thesis, student
+    lib.issue(staff, "F1", "T1")                                  # thesis, faculty: ok
+    _expect(PermissionDenied, lib.issue, s, "F1", "B2")           # student acting for someone else
+    lib.issue(s, "S1", "B2")                                      # member for themself: ok
+    _expect(PermissionDenied, lib.issue, staff, "L1", "B2")       # librarian is not a member
+    _expect(PermissionDenied, lib.add_item, s, Book("X", "T", "A", 2020))
+    _expect(NotFound, lib.issue, staff, "S1", "NOPE")
+
+
+def test_issue_checks_borrowing_rules() -> None:
+    lib, staff, s, f = _library()
+    lib.issue(staff, "S1", "B1")
+    _expect(ItemNotAvailable, lib.issue, staff, "F1", "B1")       # only copy is out
+    lib.issue(staff, "S1", "B2")
+    lib.issue(staff, "S1", "E1")
+    _expect(LimitExceeded, lib.issue, staff, "S1", "M1")          # 3 of 3 (B1, B2, E1)
+
+
+def test_same_item_twice_is_blocked() -> None:
+    lib, staff, s, f = _library()
+    lib.issue(staff, "F1", "B2")
+    e = _expect(LibraryException, lib.issue, staff, "F1", "B2")
+    assert "already has" in str(e)
+
+
+def test_overdue_loan_blocks_borrowing_with_zero_fines() -> None:
+    lib, staff, s, f = _library()
+    lib.issue(staff, "S1", "B1", today=date(2026, 1, 1))          # due 15 Jan
+    later = date(2026, 1, 20)
+    assert s.fines == 0
+    e = _expect(OverdueLoans, lib.issue, staff, "S1", "B2", later)
+    assert "overdue" in str(e)
+    assert not s.can_borrow(later)
+
+
+def test_return_charges_fine_and_frees_copy() -> None:
+    lib, staff, s, f = _library()
+    lib.issue(staff, "S1", "B1", today=date(2026, 1, 1))          # due 15 Jan
+    loan = lib.return_item(staff, "S1", "B1", today=date(2026, 1, 19))  # 4 days late
+    assert loan.is_returned() and s.fines == 40
+    assert s.loans == [] and s.history == [loan]
+    assert lib.get_item("B1").available_copies == 1
+    _expect(UnpaidFines, lib.issue, staff, "S1", "B2")
+    s.pay_fine(40)
+    lib.issue(staff, "S1", "B2")
+    _expect(NotFound, lib.return_item, staff, "S1", "B1")          # already returned
+
+
+def test_reserve_rules() -> None:
+    lib, staff, s, f = _library()
+    _expect(LibraryException, lib.reserve, s, "S1", "B2")          # copy available now
+    _expect(PermissionDenied, lib.reserve, s, "S1", "T1")          # student can't borrow thesis
+    _expect(PermissionDenied, lib.reserve, s, "S1", "R1")          # reference book
+    lib.issue(staff, "F1", "B1")
+    _expect(LibraryException, lib.reserve, f, "F1", "B1")          # already has it
+    lib.reserve(s, "S1", "B1")
+    e = _expect(LibraryException, lib.reserve, s, "S1", "B1")      # duplicate
+    assert "already reserved" in str(e)
+
+
+def test_return_notifies_next_in_line_and_holds_copy() -> None:
+    lib, staff, s, f = _library()
+    other = Student("S2", "Bilal", User.hash_password("pw"))
+    lib.add_user(other)
+    lib.issue(staff, "F1", "B1")
+    lib.reserve(s, "S1", "B1")
+    lib.reserve(other, "S2", "B1")
+    assert [r.member.user_id for r in lib.get_waitlist("B1")] == ["S1", "S2"]
+    assert lib.get_status_text("B1") == "All copies issued · 2 waiting"
+
+    lib.return_item(staff, "F1", "B1")
+    assert len(s.notifications) == 1 and "held for you" in s.notifications[0]
+    assert other.notifications == []                                # only the next person
+    assert lib.get_status_text("B1") == "Returned copies on hold · 2 waiting"
+    _expect(ItemNotAvailable, lib.issue, staff, "S2", "B1")          # held for S1, not S2
+
+    lib.issue(staff, "S1", "B1")                                     # S1 collects it
+    assert [r.member.user_id for r in lib.get_waitlist("B1")] == ["S2"]
+    assert lib.get_status_text("B1") == "All copies issued · 1 waiting"
+
+
+def test_notification_center_order() -> None:
+    nc = NotificationCenter()
+    a = Student("S1", "Ali", User.hash_password("pw"))
+    b = Student("S2", "Bilal", User.hash_password("pw"))
+    nc.subscribe("B1", a)
+    nc.subscribe("B1", b)
+    nc.subscribe("B1", a)                     # duplicate ignored
+    assert nc.notify("B1", "first") is a
+    assert nc.notify("B1", "second") is b
+    assert nc.notify("B1", "third") is None   # nobody left
+    assert a.notifications == ["first"] and b.notifications == ["second"]
+
+
+def test_search_title_author_subject() -> None:
+    lib, *_ = _library()
+    ids = lambda q: [i.item_id for i in lib.search(q)]
+    assert ids("clean") == ["B1"]                       # title
+    assert ids("GOODFELLOW") == ["B2"]                  # author, any case
+    assert ids("machine learning") == ["B2"]            # subject, two words
+    assert ids("zzz") == []
+    assert len(ids("")) == 6
+    assert ids("") == [i.item_id for i in sorted(lib.all_items())]  # sorted by title
+
+
+def test_status_text() -> None:
+    lib, staff, s, f = _library()
+    assert lib.get_status_text("B2") == "3 of 3 available"
+    assert lib.get_status_text("R1") == "Read in library only · 2 of 2 available"
+    assert lib.get_status_text("T1") == "Faculty borrowing only · 1 of 1 available"
+    assert lib.get_status_text("E1") == "Available online"
+    lib.issue(staff, "F1", "B1")
+    assert lib.get_status_text("B1") == "All copies issued"
 
 
 # ---------- runner ----------

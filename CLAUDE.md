@@ -143,6 +143,7 @@ Warm paper look, serif headings, book-spine colour blocks. Match the mockups in 
 - Work one phase at a time. Do not jump ahead or build multiple phases in one go.
 - Keep code readable over clever.
 - Smoke tests live in `tests/smoke_test.py` (run `python -m tests.smoke_test` from the project root). Extend it with tests for each new phase.
+- Viva notes live in `docs/PROJECT_NOTES.md`. After finishing every phase, append a section for it: the classes, what each does, the OOP concept it shows, and the decisions made. Update the "Quick map" table when a phase adds a new concept or pattern, and fix earlier sections if later work changes them.
 
 ## Phases
 
