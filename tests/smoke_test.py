@@ -3,9 +3,12 @@
 Run from the project root:  python -m tests.smoke_test
 """
 
+from datetime import date, datetime, timedelta
+
 from exceptions import ItemNotAvailable, LibraryException, LimitExceeded, UnpaidFines
-from models import (Book, EBook, Faculty, Librarian, LibraryItem, Magazine, Member,
-                    ReferenceBook, Student, Thesis, User)
+from models import (Book, EBook, Faculty, Librarian, LibraryItem, Loan, Magazine, Member,
+                    ReferenceBook, Reservation, Student, Thesis, User)
+from services.fine_policy import FacultyFinePolicy, FinePolicy, StudentFinePolicy
 from services.item_factory import ItemFactory
 
 
@@ -31,7 +34,7 @@ def test_roles_and_permissions() -> None:
 def test_borrow_limit() -> None:
     s = Student("S1", "Ali", User.hash_password("pw"))
     for _ in range(3):
-        s.add_loan(object())  # placeholder until Loan exists (Phase 3)
+        s.add_loan(Loan(s, Book("B1", "T", "A", 2020), date.today(), date.today()))
     assert not s.can_borrow()
     try:
         s.check_can_borrow()
@@ -215,6 +218,101 @@ def test_abstract_item_cannot_be_created() -> None:
         assert False, "LibraryItem should be abstract"
     except TypeError:
         pass
+
+
+# ---------- Phase 3: fine policies, Loan, Reservation ----------
+
+def _loan(member: Member, overdue_days: int) -> Loan:
+    """A 14-day loan whose due date was overdue_days ago."""
+    due = date.today() - timedelta(days=overdue_days)
+    return Loan(member, Book("B1", "Algorithms", "Y", 2002), due - timedelta(days=14), due)
+
+
+def test_fine_policy_rates_and_caps() -> None:
+    sp, fp = StudentFinePolicy(), FacultyFinePolicy()
+    assert [sp.calculate_fine(d) for d in (-2, 0, 1, 3, 50, 1000)] == [0, 0, 10, 30, 500, 500]
+    assert [fp.calculate_fine(d) for d in (-2, 0, 1, 3, 60, 1000)] == [0, 0, 5, 15, 300, 300]
+    assert sp.describe() == "Rs 10 per day, up to Rs 500"
+    assert fp.describe() == "Rs 5 per day, up to Rs 300"
+
+
+def test_fine_policy_is_abstract() -> None:
+    try:
+        FinePolicy()
+        assert False, "FinePolicy should be abstract"
+    except TypeError:
+        pass
+
+
+def test_members_pick_their_fine_policy() -> None:
+    s = Student("S1", "Ali", User.hash_password("pw"))
+    f = Faculty("F1", "Dr. Khan", User.hash_password("pw"))
+    assert isinstance(s.get_fine_policy(), StudentFinePolicy)
+    assert isinstance(f.get_fine_policy(), FacultyFinePolicy)
+
+
+def test_loan_overdue_and_fine_depend_on_member() -> None:
+    s = Student("S1", "Ali", User.hash_password("pw"))
+    f = Faculty("F1", "Dr. Khan", User.hash_password("pw"))
+    on_time = _loan(s, overdue_days=0)
+    assert not on_time.is_overdue() and on_time.calculate_fine() == 0
+    # Same 4 days late, different fine: the policy decides, not Loan.
+    assert _loan(s, 4).is_overdue() and _loan(s, 4).calculate_fine() == 40
+    assert _loan(f, 4).calculate_fine() == 20
+    assert _loan(s, 365).calculate_fine() == StudentFinePolicy.MAX_FINE
+
+
+def test_fine_rates_are_configurable() -> None:
+    s = Student("S1", "Ali", User.hash_password("pw"))
+    old = StudentFinePolicy.DAILY_RATE
+    try:
+        StudentFinePolicy.DAILY_RATE = 20.0  # changing one setting changes every fine
+        assert _loan(s, 3).calculate_fine() == 60
+    finally:
+        StudentFinePolicy.DAILY_RATE = old
+
+
+def test_loan_return_freezes_fine() -> None:
+    s = Student("S1", "Ali", User.hash_password("pw"))
+    loan = _loan(s, overdue_days=10)
+    loan.mark_returned(loan.due_date + timedelta(days=2))  # came back 2 days late
+    assert loan.is_returned() and loan.days_overdue() == 2
+    assert loan.calculate_fine(today=date.today() + timedelta(days=100)) == 20
+    try:
+        loan.mark_returned()
+        assert False, "expected ValueError for double return"
+    except ValueError:
+        pass
+
+
+def test_loan_rejects_bad_dates_and_wrong_member() -> None:
+    s = Student("S1", "Ali", User.hash_password("pw"))
+    other = Student("S2", "Bilal", User.hash_password("pw"))
+    book = Book("B1", "T", "A", 2020)
+    try:
+        Loan(s, book, date.today(), date.today() - timedelta(days=1))
+        assert False, "expected ValueError for due before issue"
+    except ValueError:
+        pass
+    try:
+        s.add_loan(Loan(other, book, date.today(), date.today()))
+        assert False, "expected ValueError for another member's loan"
+    except ValueError:
+        pass
+
+
+def test_reservations_sort_into_waitlist_order() -> None:
+    book = Book("B1", "T", "A", 2020)
+    a = Student("S1", "Ali", User.hash_password("pw"))
+    b = Faculty("F1", "Dr. Khan", User.hash_password("pw"))
+    c = Student("S3", "Chen", User.hash_password("pw"))
+    t = datetime(2026, 10, 1, 9, 0)
+    first = Reservation(b, book, t)
+    second = Reservation(c, book, t + timedelta(minutes=5))
+    third = Reservation(a, book, t + timedelta(hours=2))
+    waitlist = sorted([third, first, second])
+    assert [r.member.user_id for r in waitlist] == ["F1", "S3", "S1"]
+    assert Reservation(a, book).created_at <= datetime.now()
 
 
 # ---------- runner ----------

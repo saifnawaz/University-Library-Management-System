@@ -9,9 +9,10 @@ from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING
 
 from exceptions import LimitExceeded, UnpaidFines
+from services.fine_policy import FacultyFinePolicy, FinePolicy, StudentFinePolicy
 
 if TYPE_CHECKING:
-    # Only used for type hints; the Loan class is written in Phase 3.
+    # Only used for type hints; a real import would be circular (Loan uses Member).
     from models.loan import Loan
 
 
@@ -134,7 +135,9 @@ class Member(User):
     def get_loan_days(self) -> int:
         """Default loan period in days for this member type."""
 
-    # get_fine_policy() is added in Phase 3, once the FinePolicy classes exist.
+    @abstractmethod
+    def get_fine_policy(self) -> FinePolicy:
+        """Fine rules that apply to this member's late returns."""
 
     def has_research_access(self) -> bool:
         """Return True if this member may borrow research items such as theses."""
@@ -163,7 +166,9 @@ class Member(User):
     # ---- loan and fine bookkeeping (called by Library, not by routes) ----
 
     def add_loan(self, loan: Loan) -> None:
-        """Record a new active loan."""
+        """Record a new active loan. The loan must belong to this member."""
+        if loan.member is not self:
+            raise ValueError("This loan belongs to a different member.")
         self._loans.append(loan)
 
     def close_loan(self, loan: Loan) -> None:
@@ -201,6 +206,9 @@ class Student(Member):
     def get_loan_days(self) -> int:
         return self.LOAN_DAYS
 
+    def get_fine_policy(self) -> FinePolicy:
+        return StudentFinePolicy()
+
 
 class Faculty(Member):
     """A faculty member: 10 items at a time, 30-day loans."""
@@ -216,6 +224,9 @@ class Faculty(Member):
 
     def get_loan_days(self) -> int:
         return self.LOAN_DAYS
+
+    def get_fine_policy(self) -> FinePolicy:
+        return FacultyFinePolicy()
 
     def has_research_access(self) -> bool:
         return True
