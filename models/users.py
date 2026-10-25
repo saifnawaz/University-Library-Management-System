@@ -136,6 +136,10 @@ class Member(User):
 
     # get_fine_policy() is added in Phase 3, once the FinePolicy classes exist.
 
+    def has_research_access(self) -> bool:
+        """Return True if this member may borrow research items such as theses."""
+        return False
+
     # ---- borrowing rules ----
 
     def check_can_borrow(self) -> None:
@@ -212,6 +216,9 @@ class Faculty(Member):
 
     def get_loan_days(self) -> int:
         return self.LOAN_DAYS
+
+    def has_research_access(self) -> bool:
+        return True
 
 
 class Librarian(User):

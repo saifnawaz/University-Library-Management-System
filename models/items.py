@@ -7,7 +7,7 @@ from datetime import date
 from typing import Any
 
 from exceptions import ItemNotAvailable
-from models.users import Faculty, Member
+from models.users import Member
 
 
 class LibraryItem(ABC):
@@ -179,6 +179,8 @@ class LibraryItem(ABC):
     def __eq__(self, other: object) -> bool:
         """Two items are equal if they have the same item_id."""
         if not isinstance(other, LibraryItem):
+            # Not "False": NotImplemented tells Python to try the other object's
+            # __eq__, and if that also gives up, == falls back to False.
             return NotImplemented
         return self._item_id == other._item_id
 
@@ -316,23 +318,31 @@ class Magazine(LibraryItem):
 
 
 class Thesis(LibraryItem):
-    """A research thesis. Only Faculty members may borrow it."""
+    """A research thesis. Only members with research access (Faculty) may borrow it."""
 
     TYPE_KEY = "thesis"
 
     def __init__(self, item_id: str, title: str, author: str, year: int,
-                 supervisor: str = "", **kwargs: Any) -> None:
-        """Create a thesis. 'author' is the student who wrote it."""
+                 supervisor: str, **kwargs: Any) -> None:
+        """Create a thesis. 'author' is the student who wrote it; supervisor is required."""
         super().__init__(item_id, title, author, year, **kwargs)
-        self._supervisor: str = supervisor.strip()
+        self._supervisor: str = ""
+        self.supervisor = supervisor  # validated by the setter
 
     @property
     def supervisor(self) -> str:
-        """Name of the thesis supervisor (may be empty)."""
+        """Name of the thesis supervisor."""
         return self._supervisor
 
+    @supervisor.setter
+    def supervisor(self, value: str) -> None:
+        value = value.strip()
+        if not value:
+            raise ValueError("A thesis must have a supervisor.")
+        self._supervisor = value
+
     def can_be_borrowed_by(self, member: Member) -> bool:
-        return isinstance(member, Faculty)
+        return member.has_research_access()
 
     def get_item_type(self) -> str:
         return "Thesis"

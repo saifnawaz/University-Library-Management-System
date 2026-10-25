@@ -73,7 +73,8 @@ def test_name_validation() -> None:
 # ---------- Phase 2: items + ItemFactory ----------
 
 def _sample_items() -> dict[str, LibraryItem]:
-    base = {"author": "Someone", "year": 2020, "total_copies": 2}
+    # "supervisor" is only used by Thesis; the factory ignores it for other types.
+    base = {"author": "Someone", "year": 2020, "total_copies": 2, "supervisor": "Dr. Rahman"}
     return {
         t: ItemFactory.create({"type": t, "item_id": f"I-{t}", "title": f"{t} title", **base})
         for t in ItemFactory.ITEM_TYPES
@@ -171,6 +172,41 @@ def test_operator_overloading() -> None:
     assert len({a, a_again, b}) == 2           # __hash__ matches __eq__
     assert sorted([a, b]) == [b, a]            # __lt__ sorts by title, ignoring case
     assert str(b) == '"Algorithms" by Y (2002)'
+
+
+def test_research_access() -> None:
+    s = Student("S1", "Ali", User.hash_password("pw"))
+    f = Faculty("F1", "Dr. Khan", User.hash_password("pw"))
+    assert not s.has_research_access()
+    assert f.has_research_access()
+
+
+def test_thesis_requires_supervisor() -> None:
+    thesis = _sample_items()["thesis"]
+    assert thesis.supervisor == "Dr. Rahman"
+    for data in (
+        {"type": "thesis", "item_id": "T1", "title": "T", "author": "A", "year": 2020},
+        {"type": "thesis", "item_id": "T1", "title": "T", "author": "A", "year": 2020,
+         "supervisor": "   "},
+    ):
+        try:
+            ItemFactory.create(data)
+            assert False, "expected ValueError for missing supervisor"
+        except ValueError:
+            pass
+
+
+def test_eq_with_non_item_returns_not_implemented() -> None:
+    book = Book("B1", "Algorithms", "Y", 2002)
+    assert book.__eq__("B1") is NotImplemented
+    assert book.__lt__(5) is NotImplemented
+    assert book != "B1"            # Python falls back to "not equal"
+    assert not (book == None)      # noqa: E711 - checking == on purpose
+    try:
+        _ = book < 5
+        assert False, "expected TypeError"
+    except TypeError:
+        pass
 
 
 def test_abstract_item_cannot_be_created() -> None:

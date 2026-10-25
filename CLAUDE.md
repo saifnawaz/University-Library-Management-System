@@ -134,6 +134,7 @@ Warm paper look, serif headings, book-spine colour blocks. Match the mockups in 
 
 ## Git
 
+- Never run `git commit` or `git push`. The author makes all commits; say when work is ready to commit.
 - Do not add Co-Authored-By or any Claude attribution to commit messages.
 
 ## Working style
