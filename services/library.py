@@ -10,6 +10,9 @@ from models.loan import Loan
 from models.reservation import Reservation
 from models.users import Member, User
 from services.notification_center import NotificationCenter
+from storage.database import Database
+from storage.repositories import (ItemRepository, LoanRepository, ReservationRepository,
+                                  UserRepository)
 
 
 class Library:
@@ -32,17 +35,67 @@ class Library:
         """Set up empty storage, but only once (Python calls __init__ on every Library())."""
         if self._initialized:
             return
+        self._clear()
+        self._initialized: bool = True
+
+    def _clear(self) -> None:
+        """Empty all in-memory data."""
         self._items: dict[str, LibraryItem] = {}
         self._users: dict[str, User] = {}
         self._loans: list[Loan] = []                # every loan, active and returned
         self._reservations: list[Reservation] = []  # active reservations only
         self._notifications: NotificationCenter = NotificationCenter()
-        self._initialized: bool = True
+        self._next_loan_id: int = 1
 
     @classmethod
     def reset(cls) -> None:
         """Forget the current instance so the next Library() starts empty. For tests."""
         cls._instance = None
+
+    # ---- saving and loading ----
+
+    def save_to(self, db: Database) -> None:
+        """Write the whole library to the database, replacing what was saved before.
+
+        Runs as one transaction: if anything fails, the old saved data is kept.
+        """
+        items, users = ItemRepository(db), UserRepository(db)
+        loans = LoanRepository(db, self._users, self._items)
+        reservations = ReservationRepository(db, self._users, self._items)
+        with db.transaction():
+            # Delete children before parents, insert parents before children,
+            # so the foreign keys are never broken.
+            for repo in (reservations, loans, users, items):
+                repo.clear()
+            for item in self._items.values():
+                items.save(item)
+            for user in self._users.values():
+                users.save(user)
+            for loan in self._loans:
+                loans.save(loan)
+            for reservation in self._reservations:
+                reservations.save(reservation)
+
+    def load_from(self, db: Database) -> None:
+        """Replace everything in memory with what is saved in the database."""
+        self._clear()
+        for item in ItemRepository(db).all():
+            self._items[item.item_id] = item
+        for user in UserRepository(db).all():
+            self._users[user.user_id] = user
+
+        for loan in LoanRepository(db, self._users, self._items).all():
+            self._loans.append(loan)
+            loan.member.add_loan(loan)
+            if loan.is_returned():
+                loan.member.close_loan(loan)  # moves it into the member's history
+        self._next_loan_id = max((l.loan_id for l in self._loans), default=0) + 1
+
+        # Comes back in waitlist order; members not yet told go back in the line.
+        for reservation in ReservationRepository(db, self._users, self._items).all():
+            self._reservations.append(reservation)
+            if not reservation.notified:
+                self._notifications.subscribe(reservation.item.item_id, reservation.member)
 
     # ---- items and users ----
 
@@ -52,6 +105,33 @@ class Library:
         if item.item_id in self._items:
             raise ValueError(f"An item with id {item.item_id!r} already exists.")
         self._items[item.item_id] = item
+
+    def remove_item(self, actor: User, item_id: str) -> None:
+        """Remove an item from the catalog. Librarians only; refused while any copy is on loan.
+
+        Its reservations are cancelled (waiting members are told) and its past
+        loans are removed from members' history.
+        """
+        self._require_librarian(actor)
+        item = self.get_item(item_id)
+        on_loan = [l for l in self._loans if l.item.item_id == item_id and not l.is_returned()]
+        if on_loan:
+            raise LibraryException(
+                f'Cannot remove "{item.title}": {len(on_loan)} copy/copies still on loan.'
+            )
+
+        for reservation in self.get_waitlist(item_id):
+            reservation.member.receive_notification(
+                f'"{item.title}" was removed from the catalog, so your reservation was cancelled.'
+            )
+            self._notifications.unsubscribe(item_id, reservation.member)
+        self._reservations = [r for r in self._reservations if r.item.item_id != item_id]
+
+        for loan in self._loans:
+            if loan.item.item_id == item_id:
+                loan.member.remove_history_for(item_id)
+        self._loans = [l for l in self._loans if l.item.item_id != item_id]
+        del self._items[item_id]
 
     def add_user(self, user: User) -> None:
         """Register a user account."""
@@ -102,7 +182,9 @@ class Library:
 
         # All checks passed: now change state.
         item.checkout_copy()
-        loan = Loan(member, item, today, today + timedelta(days=self._loan_days(member, item)))
+        due = today + timedelta(days=self._loan_days(member, item))
+        loan = Loan(self._next_loan_id, member, item, today, due)
+        self._next_loan_id += 1
         member.add_loan(loan)
         self._loans.append(loan)
         self._remove_reservation(member, item)
@@ -124,9 +206,7 @@ class Library:
             member.add_fine(fine)
         member.close_loan(loan)
         item.return_copy()
-        self._notifications.notify(
-            item_id, f'"{item.title}" is back and being held for you. Please collect it.'
-        )
+        self._notify_held_copies(item)
         return loan
 
     # ---- reservations ----
@@ -151,6 +231,19 @@ class Library:
         self._reservations.append(reservation)
         self._notifications.subscribe(item_id, member)
         return reservation
+
+    def cancel_reservation(self, actor: User, member_id: str, item_id: str) -> None:
+        """Cancel a reservation: the member's own, or anyone's if the actor is a librarian.
+
+        If a returned copy was being held for this member, it passes to the next in line.
+        """
+        member = self._get_member(member_id)
+        self._require_self_or_librarian(actor, member)
+        item = self.get_item(item_id)
+        if not any(r.member is member for r in self.get_waitlist(item_id)):
+            raise NotFound(f'{member.name} has no reservation for "{item.title}".')
+        self._remove_reservation(member, item)
+        self._notify_held_copies(item)
 
     def get_waitlist(self, item_id: str) -> list[Reservation]:
         """Reservations for an item, first in line first."""
@@ -244,6 +337,23 @@ class Library:
         if item.available_copies > 0:
             return f'The free copies of "{item.title}" are held for members on the waitlist.'
         return f'All copies of "{item.title}" are issued. You can reserve it.'
+
+    def _notify_held_copies(self, item: LibraryItem) -> None:
+        """Tell everyone a free copy is now held for, if they have not been told yet.
+
+        The first N people in line get the N free copies. NotificationCenter's
+        line holds only people not yet told, in waitlist order, so each notify()
+        reaches the next of them.
+        """
+        waitlist = self.get_waitlist(item.item_id)
+        held_for = min(item.available_copies, len(waitlist))
+        for reservation in waitlist[:held_for]:
+            if not reservation.notified:
+                self._notifications.notify(
+                    item.item_id,
+                    f'"{item.title}" is back and being held for you. Please collect it.',
+                )
+                reservation.mark_notified()
 
     def _remove_reservation(self, member: Member, item: LibraryItem) -> None:
         """Drop the member's reservation for this item (if any) once they borrow it."""

@@ -17,6 +17,8 @@ One section per phase, added as each phase is finished.
 | Factory | `ItemFactory.create()` (`services/item_factory.py`) |
 | Strategy | `FinePolicy` and its subclasses (`services/fine_policy.py`) |
 | Observer | `NotificationCenter` (`services/notification_center.py`) + `Member.receive_notification()` |
+| Generics | `Repository(Generic[T])` (`storage/repositories.py`): one base class, used as `Repository[LibraryItem]`, `Repository[User]`, and so on |
+| Repository | `ItemRepository`, `UserRepository`, `LoanRepository`, `ReservationRepository`: the only classes that talk to the database |
 
 ## Python vs C++ cheat sheet
 
@@ -32,6 +34,8 @@ One section per phase, added as each phase is finished.
 | `__new__` | the allocation step, before the constructor body runs |
 | `@staticmethod` | `static` member function |
 | class attribute (`BORROW_LIMIT = 3`) | `static const` member |
+| `class Repository(Generic[T])` | `template <typename T> class Repository` |
+| `with db.transaction():` | an RAII guard object: the setup runs on entry, the cleanup runs on exit even if an exception is thrown |
 
 ---
 
@@ -134,13 +138,13 @@ One section per phase, added as each phase is finished.
 - **OOP concept:** Encapsulation and delegation (Loan passes the fine calculation to the policy object).
 
 ### `Reservation`
-- **What it does:** Stores member, item and `created_at`, all read-only. `__lt__` compares `created_at`, with `user_id` as a tie-breaker, so `sorted(reservations)` returns the waitlist with the earliest first.
+- **What it does:** Stores member, item and `created_at`, all read-only, plus a `notified` flag that can only be switched on, through `mark_notified()`, once the member has been told a copy is held for them. The flag was added in Phase 5 so it can be saved. `__lt__` compares `created_at`, with `user_id` as a tie-breaker, so `sorted(reservations)` returns the waitlist with the earliest first.
 - **OOP concept:** Encapsulation and operator overloading.
 
 ### Decisions
 - Date methods take an optional `today` so tests can pretend it's a different day. The app doesn't pass it.
 - `Member.add_loan()` rejects a loan that belongs to a different member.
-- `Loan` has no id yet; one will be added in Phase 5 for the database.
+- Each `Loan` has a `loan_id` (added in Phase 5), given by `Library` when it issues the loan.
 
 ---
 
@@ -183,5 +187,53 @@ One section per phase, added as each phase is finished.
 ### Decisions
 - Issue, return and reserve can be done by a librarian for any member, or by a member for their own account. A student cannot act for someone else.
 - New exceptions: `OverdueLoans` and `NotFound`, both subclasses of `LibraryException`.
-- Notifications are kept in a list on `Member` and will be saved to the database in Phase 5.
-- Not built yet: removing items and cancelling reservations. They'll be needed by the librarian screens.
+- Notifications are kept in a list on `Member` and saved to the database (Phase 5).
+
+### Added after Phase 4: `remove_item()` and `cancel_reservation()`
+- **`remove_item(actor, item_id)`:** Librarians only, and refused while any copy is on loan. Anyone waiting for the item gets a message and their reservation is cancelled. The item's past loans are also removed from members' history, so the database never has a loan pointing at an item that no longer exists.
+- **`cancel_reservation(actor, member_id, item_id)`:** A member can cancel their own reservation, and a librarian can cancel anyone's. If a returned copy was being held for that member, it passes to the next person in line, and they're notified.
+- **`_notify_held_copies(item)`:** One helper used by both `return_item()` and `cancel_reservation()`. If there are N free copies, the first N people in line should each have been told. Anyone in that group whose reservation isn't `notified` yet gets a message.
+
+---
+
+## Phase 5: Repository + SQLite persistence
+
+**Files:** `storage/database.py`, `storage/repositories.py`; changes to `models/loan.py`, `models/reservation.py`, `services/library.py`, `.env.example`
+
+### `Database` (`storage/database.py`)
+- **What it does:** Owns one SQLite connection and creates the five tables (`items`, `users`, `notifications`, `loans`, `reservations`) if they don't exist. `execute()` runs one SQL statement with `?` placeholders. `transaction()` groups statements so they either all succeed or are all undone.
+- **DB path:** `LIBRARY_DB_PATH` from `.env`, or `library.db` in the project folder if it isn't set. A relative path is taken from the project folder, not from wherever the app was started. `*.db` is in `.gitignore`.
+- **OOP concept:** Encapsulation. The rest of the program never touches `sqlite3` directly.
+
+### `Repository(Generic[T])` (abstract)
+- **What it does:** A base class for saving and loading one kind of object. The SQL for `save()`, `find()`, `all()`, `delete()` and `clear()` is written once, here. Each subclass only sets which table and columns it uses (`TABLE`, `COLUMNS`, `KEY_COLUMNS`) and implements two abstract methods: `_to_row(obj)` (object → row) and `_from_row(row)` (row → object).
+- **What `Generic[T]` means:** `T` is a placeholder type, like a C++ template parameter. `ItemRepository(Repository[LibraryItem])` means "a repository whose `find()` returns a `LibraryItem`", which lets type checkers and editors catch mistakes.
+- **OOP concept:** Generics, abstraction, inheritance, and the Template Method idea: the base class fixes the steps and the subclasses fill in the details.
+
+### `ItemRepository`
+- **What it does:** Saves the common fields as columns. Type-specific fields (`isbn`, `supervisor`, `issue_number`, `file_format`) go into one JSON column called `extra`. Loading turns the row back into a dict and passes it to `ItemFactory.create()`, so every item comes back as the right subclass.
+- **OOP concept:** Reuse. The Factory (Phase 2) and `to_dict()` make loading items a few lines.
+
+### `UserRepository`
+- **What it does:** Saves the role, name, **password hash** (never the plain password) and fine balance. The role string picks the class to rebuild (`"Student"` → `Student`). It overrides `save()`, `delete()` and `clear()` to handle the `notifications` table too: it calls `super().save()` and then adds the notifications.
+- **OOP concept:** Method overriding with `super()`, which extends the parent's behaviour instead of replacing it.
+
+### `LoanRepository` / `ReservationRepository`
+- **What they do:** Rows store only ids (`user_id`, `item_id`). To rebuild an object, the repository is given the already-loaded users and items, and looks up the real objects. A loaded loan points to the same `Member` object the library holds, not to a copy.
+
+### `Library.save_to(db)` and `Library.load_from(db)`
+- **`save_to`:** Writes everything in one transaction. It clears the tables children-first and inserts parents-first so foreign keys are never broken. If anything fails, the old saved data is kept.
+- **`load_from`:** Loads in dependency order:
+  1. items;
+  2. users;
+  3. loans, each added to its member, with returned ones moved to history through the normal `add_loan()` / `close_loan()`;
+  4. reservations, in waitlist order. Members not yet notified go back into the `NotificationCenter` line.
+  The next loan id continues after the highest saved one.
+- **Tested:** `test_restart_keeps_state` builds a busy library, saves it, resets the singleton (a "restart"), loads into a fresh `Library` and checks that every item, user, fine, notification, loan, history entry, waitlist and status text matches. It then checks the loaded library still works.
+
+### Decisions
+- **All SQL lives in `storage/`.** A test (`test_no_sql_outside_storage`) fails if SQL appears anywhere else.
+- **SQL injection:** table and column names come only from class constants, and values always go through `?` placeholders.
+- **Saves are full snapshots.** `save_to()` rewrites every table. That's simple and safe for a library of this size, and Phase 6 can call it after each change.
+- **`loan_id` is the first argument of `Loan(...)`, and `Library` assigns it.** That way the id exists before the loan is saved.
+- **`Reservation.notified` is stored**, so after a restart nobody is told twice and nobody is skipped.

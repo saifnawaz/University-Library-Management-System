@@ -3,7 +3,12 @@
 Run from the project root:  python -m tests.smoke_test
 """
 
+import os
+import re
+import tempfile
 from datetime import date, datetime, timedelta
+from pathlib import Path
+from typing import Any
 
 from exceptions import (ItemNotAvailable, LibraryException, LimitExceeded, NotFound,
                         OverdueLoans, PermissionDenied, UnpaidFines)
@@ -13,6 +18,8 @@ from services.fine_policy import FacultyFinePolicy, FinePolicy, StudentFinePolic
 from services.item_factory import ItemFactory
 from services.library import Library
 from services.notification_center import NotificationCenter
+from storage.database import PROJECT_ROOT, Database, default_db_path
+from storage.repositories import ItemRepository, UserRepository
 
 
 def _expect(exc_type: type[Exception], fn, *args, **kwargs) -> Exception:
@@ -46,7 +53,7 @@ def test_roles_and_permissions() -> None:
 def test_borrow_limit() -> None:
     s = Student("S1", "Ali", User.hash_password("pw"))
     for _ in range(3):
-        s.add_loan(Loan(s, Book("B1", "T", "A", 2020), date.today(), date.today()))
+        s.add_loan(Loan(1, s, Book("B1", "T", "A", 2020), date.today(), date.today()))
     assert not s.can_borrow()
     try:
         s.check_can_borrow()
@@ -237,7 +244,7 @@ def test_abstract_item_cannot_be_created() -> None:
 def _loan(member: Member, overdue_days: int) -> Loan:
     """A 14-day loan whose due date was overdue_days ago."""
     due = date.today() - timedelta(days=overdue_days)
-    return Loan(member, Book("B1", "Algorithms", "Y", 2002), due - timedelta(days=14), due)
+    return Loan(1, member, Book("B1", "Algorithms", "Y", 2002), due - timedelta(days=14), due)
 
 
 def test_fine_policy_rates_and_caps() -> None:
@@ -302,12 +309,12 @@ def test_loan_rejects_bad_dates_and_wrong_member() -> None:
     other = Student("S2", "Bilal", User.hash_password("pw"))
     book = Book("B1", "T", "A", 2020)
     try:
-        Loan(s, book, date.today(), date.today() - timedelta(days=1))
+        Loan(1, s, book, date.today(), date.today() - timedelta(days=1))
         assert False, "expected ValueError for due before issue"
     except ValueError:
         pass
     try:
-        s.add_loan(Loan(other, book, date.today(), date.today()))
+        s.add_loan(Loan(1, other, book, date.today(), date.today()))
         assert False, "expected ValueError for another member's loan"
     except ValueError:
         pass
@@ -487,6 +494,210 @@ def test_status_text() -> None:
     assert lib.get_status_text("E1") == "Available online"
     lib.issue(staff, "F1", "B1")
     assert lib.get_status_text("B1") == "All copies issued"
+
+
+def test_remove_item() -> None:
+    lib, staff, s, f = _library()
+    lib.issue(staff, "S1", "B1")
+    _expect(PermissionDenied, lib.remove_item, s, "B2")              # not a librarian
+    e = _expect(LibraryException, lib.remove_item, staff, "B1")      # on loan
+    assert "on loan" in str(e)
+    lib.return_item(staff, "S1", "B1")
+    assert len(s.history) == 1
+    lib.remove_item(staff, "B1")                                     # all copies back: ok
+    _expect(NotFound, lib.get_item, "B1")
+    assert s.history == []                                           # past loan forgotten
+    assert "B1" not in [i.item_id for i in lib.search("")]
+
+
+def test_remove_item_cancels_reservations() -> None:
+    lib, staff, s, f = _library()
+    lib.issue(staff, "F1", "B1")
+    lib.reserve(s, "S1", "B1")
+    lib.return_item(staff, "F1", "B1")                                # copy held for S1
+    lib.remove_item(staff, "B1")
+    assert lib.get_waitlist("B1") == []
+    assert "removed from the catalog" in s.notifications[-1]
+
+
+def test_cancel_reservation() -> None:
+    lib, staff, s, f = _library()
+    other = Student("S2", "Bilal", User.hash_password("pw"))
+    lib.add_user(other)
+    lib.issue(staff, "F1", "B1")
+    lib.reserve(s, "S1", "B1")
+    lib.reserve(other, "S2", "B1")
+    _expect(PermissionDenied, lib.cancel_reservation, other, "S1", "B1")  # not theirs
+    _expect(NotFound, lib.cancel_reservation, f, "F1", "B1")              # has none
+    lib.cancel_reservation(s, "S1", "B1")                                 # own: ok
+    assert [r.member.user_id for r in lib.get_waitlist("B1")] == ["S2"]
+    lib.reserve(s, "S1", "B1")                                            # back of the line
+    lib.cancel_reservation(staff, "S1", "B1")                             # librarian: ok
+    assert [r.member.user_id for r in lib.get_waitlist("B1")] == ["S2"]
+
+
+def test_cancel_passes_held_copy_to_next() -> None:
+    lib, staff, s, f = _library()
+    other = Student("S2", "Bilal", User.hash_password("pw"))
+    lib.add_user(other)
+    lib.issue(staff, "F1", "B1")
+    lib.reserve(s, "S1", "B1")
+    lib.reserve(other, "S2", "B1")
+    lib.return_item(staff, "F1", "B1")                                # held for S1
+    assert other.notifications == []
+    lib.cancel_reservation(s, "S1", "B1")                             # S1 gives it up
+    assert len(other.notifications) == 1 and "held for you" in other.notifications[0]
+    lib.issue(staff, "S2", "B1")                                      # S2 can now take it
+
+
+# ---------- Phase 5: Repository + SQLite ----------
+
+def _snapshot(lib: Library) -> dict[str, Any]:
+    """Everything the library knows, as plain values, so two libraries can be compared."""
+    users = {}
+    for uid in ("L1", "S1", "S2", "F1"):
+        u = lib.get_user(uid)
+        users[uid] = {"role": u.get_role(), "name": u.name, "hash": u.password_hash}
+        if isinstance(u, Member):
+            users[uid].update(
+                fines=u.fines, notifications=u.notifications,
+                loans=[(l.loan_id, l.item.item_id, l.issue_date, l.due_date) for l in u.loans],
+                history=[(l.loan_id, l.item.item_id, l.return_date) for l in u.history],
+            )
+    items = lib.all_items()
+    return {
+        "items": [i.to_dict() for i in items],
+        "users": users,
+        "waitlists": {i.item_id: [(r.member.user_id, r.created_at, r.notified)
+                                  for r in lib.get_waitlist(i.item_id)] for i in items},
+        "status": {i.item_id: lib.get_status_text(i.item_id) for i in items},
+    }
+
+
+def _busy_library() -> Library:
+    """A library with active, overdue, returned and fined loans, and two waitlists."""
+    lib, staff, s, f = _library()
+    other = Student("S2", "Bilal", User.hash_password("pw2"))
+    lib.add_user(other)
+    lib.issue(staff, "S1", "B1", today=date(2026, 1, 1))       # due 15 Jan
+    lib.return_item(staff, "S1", "B1", today=date(2026, 1, 20))  # 5 days late: Rs 50
+    lib.issue(staff, "F1", "B1")
+    lib.reserve(s, "S1", "B1")
+    lib.reserve(other, "S2", "B1")
+    lib.return_item(staff, "F1", "B1")                          # held for S1 (notified)
+    lib.issue(staff, "F1", "T1", today=date(2026, 2, 1))        # faculty thesis, overdue
+    lib.issue(staff, "S2", "E1")
+    return lib
+
+
+def test_restart_keeps_state() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        path = os.path.join(tmp, "test.db")
+        lib = _busy_library()
+        before = _snapshot(lib)
+        db = Database(path)
+        lib.save_to(db)
+        db.close()
+
+        Library.reset()                 # simulate an app restart
+        fresh = Library()
+        assert fresh is not lib and fresh.all_items() == []
+        db = Database(path)
+        fresh.load_from(db)
+        db.close()
+
+        assert _snapshot(fresh) == before
+        s, other = fresh.get_user("S1"), fresh.get_user("S2")
+        assert s.check_password("pw") and other.check_password("pw2")
+        assert type(fresh.get_item("T1")) is Thesis
+        assert all(l.member is s for l in s.history)   # loans point at the loaded objects
+
+        # The loaded library keeps working: new ids continue, the waitlist still holds.
+        _expect(ItemNotAvailable, fresh.issue, fresh.get_user("L1"), "S2", "B1")
+        _expect(OverdueLoans, fresh.issue, fresh.get_user("L1"), "F1", "B2")  # thesis still out
+        loan = fresh.issue(fresh.get_user("L1"), "S2", "B2")
+        assert loan.loan_id == 5
+        s.pay_fine(s.fines)
+        fresh.cancel_reservation(s, "S1", "B1")
+        assert "held for you" in other.notifications[-1]   # line was restored correctly
+
+
+def test_save_replaces_old_data() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        db = Database(os.path.join(tmp, "test.db"))
+        lib, staff, *_ = _library()
+        lib.save_to(db)
+        lib.remove_item(staff, "M1")
+        lib.save_to(db)
+        Library.reset()
+        fresh = Library()
+        fresh.load_from(db)
+        db.close()
+        _expect(NotFound, fresh.get_item, "M1")
+        assert len(fresh.all_items()) == 5
+
+
+def test_repository_crud() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        db = Database(os.path.join(tmp, "test.db"))
+        repo = ItemRepository(db)
+        book = Book("B1", "Clean Code", "Robert Martin", 2008, isbn="123")
+        repo.save(book)
+        found = repo.find("B1")
+        assert type(found) is Book and found.to_dict() == book.to_dict()
+        book.title = "Clean Code, 2nd ed."
+        repo.save(book)                                 # replaces, does not duplicate
+        assert [i.title for i in repo.all()] == ["Clean Code, 2nd ed."]
+        assert repo.find("NOPE") is None
+        repo.delete("B1")
+        assert repo.all() == []
+        db.close()
+
+
+def test_transaction_rolls_back_on_error() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        db = Database(os.path.join(tmp, "test.db"))
+        users = UserRepository(db)
+        try:
+            with db.transaction():
+                users.save(Student("S1", "Ali", User.hash_password("pw")))
+                raise RuntimeError("something failed half-way")
+        except RuntimeError:
+            pass
+        assert users.all() == []
+        db.close()
+
+
+def test_passwords_saved_only_as_hashes() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        path = os.path.join(tmp, "test.db")
+        db = Database(path)
+        UserRepository(db).save(Student("S1", "Ali", User.hash_password("my-secret-pw")))
+        db.close()
+        assert b"my-secret-pw" not in Path(path).read_bytes()
+
+
+def test_db_path_from_env() -> None:
+    old = os.environ.get("LIBRARY_DB_PATH")
+    try:
+        os.environ["LIBRARY_DB_PATH"] = "data/test.db"
+        assert default_db_path() == str(PROJECT_ROOT / "data" / "test.db")
+        os.environ["LIBRARY_DB_PATH"] = ""
+        assert default_db_path() == str(PROJECT_ROOT / "library.db")
+    finally:
+        if old is None:
+            os.environ.pop("LIBRARY_DB_PATH", None)
+        else:
+            os.environ["LIBRARY_DB_PATH"] = old
+
+
+def test_no_sql_outside_storage() -> None:
+    sql = re.compile(r"\b(sqlite3|SELECT\s|INSERT\s|UPDATE\s+\w+\s+SET|DELETE\s+FROM)\b")
+    for path in PROJECT_ROOT.rglob("*.py"):
+        rel = path.relative_to(PROJECT_ROOT)
+        if rel.parts[0] in ("storage", "tests", ".venv", "venv"):
+            continue
+        assert not sql.search(path.read_text(encoding="utf-8")), f"SQL found in {rel}"
 
 
 # ---------- runner ----------

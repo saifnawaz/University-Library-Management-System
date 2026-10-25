@@ -201,6 +201,10 @@ class Member(User):
         self._loans.remove(loan)
         self._history.append(loan)
 
+    def remove_history_for(self, item_id: str) -> None:
+        """Forget past loans of an item that has been removed from the catalog."""
+        self._history = [loan for loan in self._history if loan.item.item_id != item_id]
+
     def add_fine(self, amount: float) -> None:
         """Add an amount to the unpaid fine balance."""
         if amount < 0:

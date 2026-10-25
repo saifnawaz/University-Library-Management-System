@@ -14,11 +14,12 @@ class Reservation:
     """A member waiting for an item. Earlier reservations come first in the waitlist."""
 
     def __init__(self, member: Member, item: LibraryItem,
-                 created_at: datetime | None = None) -> None:
-        """Create a reservation. created_at defaults to now (pass it when loading saved data)."""
+                 created_at: datetime | None = None, notified: bool = False) -> None:
+        """Create a reservation. Pass created_at and notified when loading saved data."""
         self._member: Member = member
         self._item: LibraryItem = item
         self._created_at: datetime = created_at or datetime.now()
+        self._notified: bool = notified
 
     @property
     def member(self) -> Member:
@@ -34,6 +35,15 @@ class Reservation:
     def created_at(self) -> datetime:
         """When the reservation was made; decides the waitlist order."""
         return self._created_at
+
+    @property
+    def notified(self) -> bool:
+        """True once the member has been told a copy is held for them."""
+        return self._notified
+
+    def mark_notified(self) -> None:
+        """Record that the member has been told a copy is held for them."""
+        self._notified = True
 
     def __lt__(self, other: object) -> bool:
         """Earlier reservation is 'smaller', so sorted(reservations) gives waitlist order."""

@@ -19,6 +19,7 @@ class Loan:
 
     def __init__(
         self,
+        loan_id: int,
         member: Member,
         item: LibraryItem,
         issue_date: date,
@@ -30,6 +31,7 @@ class Loan:
             raise ValueError("Due date cannot be before the issue date.")
         if return_date is not None and return_date < issue_date:
             raise ValueError("Return date cannot be before the issue date.")
+        self._loan_id: int = loan_id
         self._member: Member = member
         self._item: LibraryItem = item
         self._issue_date: date = issue_date
@@ -37,6 +39,11 @@ class Loan:
         self._return_date: date | None = return_date
 
     # ---- properties (all read-only) ----
+
+    @property
+    def loan_id(self) -> int:
+        """Unique number of this loan, given by Library."""
+        return self._loan_id
 
     @property
     def member(self) -> Member:
@@ -93,5 +100,6 @@ class Loan:
         return policy.calculate_fine(self.days_overdue(today))
 
     def __repr__(self) -> str:
-        return (f"Loan(member={self._member.user_id!r}, item={self._item.item_id!r}, "
+        return (f"Loan(id={self._loan_id}, member={self._member.user_id!r}, "
+                f"item={self._item.item_id!r}, "
                 f"due={self._due_date.isoformat()})")
