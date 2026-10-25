@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Classic · Librarian</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600&amp;family=Source+Sans+3:wght@400;600&amp;display=swap">
+<style>
+body{margin:0}
+a{color:#2A1F16}a:hover{color:#7A2E12}
+</style>
+</helmet>
+<div style="min-height: 900px; font-family: 'Source Sans 3', system-ui, sans-serif; background: #F5EFE3; color: #2A1F16">
+<header style="border-bottom: 1px solid #D9CDB8; background: #2A1F16; color: #F5EFE3">
+<div style="max-width: 1120px; margin: 0 auto; box-sizing: border-box; padding: 18px 32px; display: flex; flex-wrap: wrap; gap: 16px 32px; align-items: center; justify-content: space-between">
+<div style="font-family: Fraunces, Georgia, serif; font-size: 22px; font-weight: 600">The Reading Room <span style="font-family: 'Source Sans 3', sans-serif; font-size: 13px; font-weight: 400; color: #E3D8C5">· Front desk</span></div>
+<nav aria-label="Main" style="display: flex; flex-wrap: wrap; gap: 4px 22px; font-size: 15px">
+<a href="#" style="text-decoration: none; color: #F5EFE3; font-weight: 600; border-bottom: 2px solid #E3D8C5; padding: 10px 0">Overview</a>
+<a href="#" style="text-decoration: none; color: #E3D8C5; padding: 10px 0">Catalog</a>
+<a href="#" style="text-decoration: none; color: #E3D8C5; padding: 10px 0">Issue &amp; return</a>
+<a href="#" style="text-decoration: none; color: #E3D8C5; padding: 10px 0">Members</a>
+<a href="#" style="text-decoration: none; color: #E3D8C5; padding: 10px 0">Reports</a>
+</nav>
+<div style="font-size: 14px; color: #E3D8C5">Librarian</div>
+</div>
+</header>
+<main style="max-width: 1120px; margin: 0 auto; box-sizing: border-box; padding: 36px 32px; display: flex; flex-direction: column; gap: 30px">
+<h1 style="margin: 0; font-family: Fraunces, Georgia, serif; font-size: 38px; font-weight: 400">Today at the desk</h1>
+<div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); border-top: 1px solid #D9CDB8; border-bottom: 1px solid #D9CDB8">
+<div style="padding: 20px 4px"><div style="font-family: Fraunces, Georgia, serif; font-size: 34px">[N]</div><div style="font-size: 14px; color: #5C4A3A">Items on loan</div></div>
+<div style="padding: 20px 4px"><div style="font-family: Fraunces, Georgia, serif; font-size: 34px; color: {{accent}}">[N]</div><div style="font-size: 14px; color: #5C4A3A">Overdue</div></div>
+<div style="padding: 20px 4px"><div style="font-family: Fraunces, Georgia, serif; font-size: 34px">Rs [N]</div><div style="font-size: 14px; color: #5C4A3A">Fines pending</div></div>
+<div style="padding: 20px 4px"><div style="font-family: Fraunces, Georgia, serif; font-size: 34px">[N]</div><div style="font-size: 14px; color: #5C4A3A">Reservations waiting</div></div>
+</div>
+<div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap: 28px">
+<section style="padding: 22px; background: #FBF7EF; border: 1px solid #D9CDB8; border-radius: 4px; display: flex; flex-direction: column; gap: 16px">
+<h2 style="margin: 0; font-family: Fraunces, Georgia, serif; font-size: 22px; font-weight: 600">Quick issue</h2>
+<div style="display: flex; flex-direction: column; gap: 6px"><label for="q-member" style="font-size: 14px; font-weight: 600">Member ID</label><input id="q-member" type="text" placeholder="Scan or type" style="height: 46px; box-sizing: border-box; padding: 0 14px; border: 1px solid #C9BA9F; border-radius: 4px; background: #FFFFFF; font: inherit; font-size: 15px"></div>
+<div style="display: flex; flex-direction: column; gap: 6px"><label for="q-item" style="font-size: 14px; font-weight: 600">Item ID</label><input id="q-item" type="text" placeholder="Scan or type" style="height: 46px; box-sizing: border-box; padding: 0 14px; border: 1px solid #C9BA9F; border-radius: 4px; background: #FFFFFF; font: inherit; font-size: 15px"></div>
+<div style="display: flex; flex-wrap: wrap; gap: 10px">
+<button type="button" style="flex: 1 1 140px; height: 46px; border: none; border-radius: 4px; background: {{accent}}; color: #FBF7EF; font: inherit; font-size: 15px; font-weight: 600; cursor: pointer">Issue</button>
+<button type="button" style="flex: 1 1 140px; height: 46px; border: 1px solid #C9BA9F; border-radius: 4px; background: transparent; color: #2A1F16; font: inherit; font-size: 15px; cursor: pointer">Return</button>
+</div>
+</section>
+<section style="display: flex; flex-direction: column; gap: 14px">
+<div style="display: flex; justify-content: space-between; align-items: baseline"><h2 style="margin: 0; font-family: Fraunces, Georgia, serif; font-size: 22px; font-weight: 600">Overdue</h2><a href="#" style="font-size: 14px">See all</a></div>
+<div style="overflow-x: auto; border: 1px solid #D9CDB8; border-radius: 4px; background: #FBF7EF">
+<table style="width: 100%; border-collapse: collapse; font-size: 14px; min-width: 420px">
+<thead><tr style="text-align: left; color: #5C4A3A"><th style="padding: 12px 14px; font-weight: 600; border-bottom: 1px solid #D9CDB8">Member</th><th style="padding: 12px 14px; font-weight: 600; border-bottom: 1px solid #D9CDB8">Item</th><th style="padding: 12px 14px; font-weight: 600; border-bottom: 1px solid #D9CDB8">Days late</th><th style="padding: 12px 14px; font-weight: 600; border-bottom: 1px solid #D9CDB8">Fine</th></tr></thead>
+<tbody>
+<tr><td style="padding: 12px 14px; border-bottom: 1px solid #E8DFCF">[Member] · Student</td><td style="padding: 12px 14px; border-bottom: 1px solid #E8DFCF">Clean Code</td><td style="padding: 12px 14px; border-bottom: 1px solid #E8DFCF; color: {{accent}}; font-weight: 600">[N]</td><td style="padding: 12px 14px; border-bottom: 1px solid #E8DFCF">Rs [N]</td></tr>
+<tr><td style="padding: 12px 14px; border-bottom: 1px solid #E8DFCF">[Member] · Faculty</td><td style="padding: 12px 14px; border-bottom: 1px solid #E8DFCF">Introduction to Algorithms</td><td style="padding: 12px 14px; border-bottom: 1px solid #E8DFCF; color: {{accent}}; font-weight: 600">[N]</td><td style="padding: 12px 14px; border-bottom: 1px solid #E8DFCF">Rs [N]</td></tr>
+<tr><td style="padding: 12px 14px">[Member] · Student</td><td style="padding: 12px 14px">Hands-On Machine Learning</td><td style="padding: 12px 14px; color: {{accent}}; font-weight: 600">[N]</td><td style="padding: 12px 14px">Rs [N]</td></tr>
+</tbody>
+</table>
+</div>
+</section>
+</div>
+<section style="display: flex; flex-direction: column; gap: 14px">
+<h2 style="margin: 0; font-family: Fraunces, Georgia, serif; font-size: 22px; font-weight: 600">Most borrowed this month</h2>
+<div style="display: flex; flex-wrap: wrap; gap: 12px; align-items: flex-end" aria-label="Most borrowed books">
+<div style="flex: 1 1 140px; display: flex; flex-direction: column; gap: 8px"><div style="height: 140px; background: #2F4A3A; border-radius: 2px"></div><div style="font-size: 14px">Hands-On Machine Learning</div></div>
+<div style="flex: 1 1 140px; display: flex; flex-direction: column; gap: 8px"><div style="height: 112px; background: {{accent}}; border-radius: 2px"></div><div style="font-size: 14px">Clean Code</div></div>
+<div style="flex: 1 1 140px; display: flex; flex-direction: column; gap: 8px"><div style="height: 92px; background: #5C4A3A; border-radius: 2px"></div><div style="font-size: 14px">Introduction to Algorithms</div></div>
+<div style="flex: 1 1 140px; display: flex; flex-direction: column; gap: 8px"><div style="height: 70px; background: #C9BA9F; border-radius: 2px"></div><div style="font-size: 14px">AI: A Modern Approach</div></div>
+</div>
+</section>
+</main>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"accent":{"editor":"color","default":"#7A2E12"},"$preview":{"width":1280,"height":900}}'>
+class Component extends DCLogic {
+renderVals() {
+return { accent: this.props.accent ?? '#7A2E12' };
+}
+}
+</script>
+</body>
+</html>

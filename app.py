@@ -105,6 +105,30 @@ def create_app(db_path: str | None = None, secret_key: str | None = None) -> Fla
         app.logger.exception("Unexpected error")  # full details go to the server log only
         return error("ServerError", "Something went wrong. Please try again.", 500)
 
+    # ---- pages (static HTML; each page's JS loads its data from the API) ----
+
+    @app.get("/")
+    def login_page() -> Response:
+        return app.send_static_file("login.html")
+
+    # URL -> HTML file. Each page loads its own data from the API.
+    pages = {
+        "/dashboard": "dashboard.html",
+        "/catalog": "catalog.html",
+        "/catalog/<item_id>": "item.html",
+        "/loans": "loans.html",
+        "/reservations": "reservations.html",
+        "/staff": "staff.html",
+        "/staff/desk": "staff-desk.html",
+        "/staff/members": "staff-members.html",
+        "/staff/reports": "staff-reports.html",
+    }
+    for url, filename in pages.items():
+        # "filename=filename" freezes the current value for this lambda; without it every
+        # page would serve the last file in the loop. **_ ignores URL parts like item_id.
+        app.add_url_rule(url, endpoint=f"page:{filename}",
+                         view_func=lambda filename=filename, **_: app.send_static_file(filename))
+
     # ---- login ----
 
     @app.post("/api/login")
@@ -168,16 +192,19 @@ def create_app(db_path: str | None = None, secret_key: str | None = None) -> Fla
 
     # ---- the member's own account ----
 
-    @app.get("/api/me/loans")
-    def my_loans() -> Response:
-        user = current_user()
-        member = library.get_member(user, user.user_id)
+    def loans_json(member_id: str) -> Response:
+        """A member's current loans, history and fines (Library checks who may see them)."""
+        member = library.get_member(current_user(), member_id)
         return jsonify(
             current=[loan.to_dict() for loan in member.loans],
-            history=[loan.to_dict() for loan in member.history],
+            history=[loan.to_dict() for loan in reversed(member.history)],  # newest first
             fines=member.fines,
             fine_policy=member.get_fine_policy().describe(),
         )
+
+    @app.get("/api/me/loans")
+    def my_loans() -> Response:
+        return loans_json(current_user().user_id)
 
     @app.get("/api/me/reservations")
     def my_reservations() -> Response:
@@ -213,6 +240,22 @@ def create_app(db_path: str | None = None, secret_key: str | None = None) -> Fla
         user = current_user()
         item = change(lambda: library.withdraw_item(user, item_id))
         return jsonify(library.describe_item(item, user))
+
+    @app.get("/api/members")
+    def members() -> Response:
+        return jsonify([m.to_dict() for m in library.list_members(current_user())])
+
+    @app.get("/api/members/<member_id>")
+    def member_detail(member_id: str) -> Response:
+        return jsonify(library.get_member(current_user(), member_id).to_dict())
+
+    @app.get("/api/members/<member_id>/loans")
+    def member_loans(member_id: str) -> Response:
+        return loans_json(member_id)
+
+    @app.get("/api/members/<member_id>/reservations")
+    def member_reservations(member_id: str) -> Response:
+        return jsonify(library.reservations_for(current_user(), member_id))
 
     @app.get("/api/reports/overdue")
     def overdue_report() -> Response:

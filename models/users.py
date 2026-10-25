@@ -87,6 +87,10 @@ class User(ABC):
     def get_role(self) -> str:
         """Return the role name, e.g. 'Student'."""
 
+    def get_role_plural(self) -> str:
+        """Role name for a group of people, e.g. 'students'."""
+        return self.get_role().lower() + "s"
+
     def can_manage_library(self) -> bool:
         """Return True if this user may add items, issue/return and manage members."""
         return False
@@ -169,10 +173,11 @@ class Member(User):
         if overdue:
             # Checked separately from fines: the fine is only added on return,
             # so an overdue item still out shows a balance of 0.
-            raise OverdueLoans(
-                f"{self.name} has {len(overdue)} overdue item(s). "
-                "Please return them before borrowing."
-            )
+            if len(overdue) == 1:
+                what = f'"{overdue[0].item.title}" is overdue. Please return it'
+            else:
+                what = f"{len(overdue)} items are overdue. Please return them"
+            raise OverdueLoans(f"{what} before borrowing more.")
         if len(self._loans) >= self.get_borrow_limit():
             raise LimitExceeded(
                 f"{self.name} already has {len(self._loans)} of "
@@ -187,6 +192,14 @@ class Member(User):
         except LibraryException:
             return False
 
+    def borrow_block_reason(self, today: date | None = None) -> str | None:
+        """Why this member cannot borrow right now, in words, or None if they can."""
+        try:
+            self.check_can_borrow(today)
+            return None
+        except LibraryException as e:
+            return e.message
+
     def has_loan_of(self, item_id: str) -> bool:
         """Return True if this member currently has this item on loan."""
         return any(loan.item.item_id == item_id for loan in self._loans)
@@ -199,7 +212,10 @@ class Member(User):
             borrow_limit=self.get_borrow_limit(),
             loan_days=self.get_loan_days(),
             active_loans=len(self._loans),
+            overdue_loans=sum(1 for loan in self._loans if loan.is_overdue()),
+            loans_remaining=max(0, self.get_borrow_limit() - len(self._loans)),
             can_borrow=self.can_borrow(),
+            borrow_block_reason=self.borrow_block_reason(),
             fine_policy=self.get_fine_policy().describe(),
             has_research_access=self.has_research_access(),
         )
@@ -274,6 +290,9 @@ class Faculty(Member):
 
     def get_fine_policy(self) -> FinePolicy:
         return FacultyFinePolicy()
+
+    def get_role_plural(self) -> str:
+        return "faculty"  # "faculty" is already plural
 
     def has_research_access(self) -> bool:
         return True

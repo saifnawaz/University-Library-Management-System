@@ -491,7 +491,7 @@ def test_status_text() -> None:
     assert lib.get_status_text("B2") == "3 of 3 available"
     assert lib.get_status_text("R1") == "Read in library only · 2 of 2 available"
     assert lib.get_status_text("T1") == "Faculty borrowing only · 1 of 1 available"
-    assert lib.get_status_text("E1") == "Available online"
+    assert lib.get_status_text("E1") == "Always available"
     lib.issue(staff, "F1", "B1")
     assert lib.get_status_text("B1") == "All copies issued"
 
@@ -788,7 +788,13 @@ def test_route_catalog_and_item_detail() -> None:
         assert items[0]["actions"]["can_borrow"] is True
         thesis = c.get("/api/items/T1").get_json()
         assert thesis["actions"]["can_borrow"] is False                 # decided in Python
-        assert "Faculty borrowing only" in thesis["actions"]["reason"]
+        assert "Faculty borrowing only" in thesis["status_text"]       # the why, in words
+        assert thesis["actions"]["reason"] is None                      # not repeated
+        _login(c, "F1")
+        c.post("/api/loans", json={"item_id": "B1"})
+        _login(c, "S1")
+        busy = c.get("/api/items/B1").get_json()                        # item-specific reason
+        assert busy["actions"]["can_borrow"] is False and "issued" in busy["actions"]["reason"]
         r = c.get("/api/items/NOPE")
         assert r.status_code == 404 and _error(r)["type"] == "NotFound"
 
@@ -910,6 +916,97 @@ def test_routes_contain_no_rules() -> None:
     for forbidden in ("can_manage_library", "can_be_borrowed_by",
                       "check_can_borrow", "get_borrow_limit", "Librarian", "Student"):
         assert forbidden not in source, f"app.py should not use {forbidden!r}"
+
+
+# ---------- Phase 7: seed data, page routes, UI fields from the API ----------
+
+def test_seed_builds_a_valid_demo_library() -> None:
+    import seed
+    lib = seed.build_library()
+    staff = lib.get_user("lib01")
+    assert len(lib.all_items()) >= 15
+    assert {i.TYPE_KEY for i in lib.all_items()} == set(ItemFactory.ITEM_TYPES)
+    assert lib.get_user("stu01").can_borrow()
+    assert "overdue" in lib.get_user("stu02").borrow_block_reason() or \
+           "fines" in lib.get_user("stu02").borrow_block_reason()
+    assert len(lib.overdue_loans(staff)) == 2
+    assert [r.member.user_id for r in lib.get_waitlist("B002")] == ["stu01"]
+    for user_id, _, password, _ in seed.ACCOUNTS:
+        assert lib.authenticate(user_id, password).user_id == user_id
+
+
+def test_pages_are_served() -> None:
+    with _client() as c:
+        for url in ("/", "/dashboard", "/catalog", "/catalog/B1", "/loans", "/reservations",
+                    "/staff", "/staff/desk", "/staff/members", "/staff/reports"):
+            r = c.get(url)
+            assert r.status_code == 200 and b"<!doctype html>" in r.data.lower(), url
+        for asset in ("/static/css/tokens.css", "/static/css/app.css", "/static/js/ui.js"):
+            assert c.get(asset).status_code == 200, asset
+
+
+def test_api_gives_ui_everything_it_needs() -> None:
+    with _client() as c:
+        _login(c, "S1")
+        me = c.get("/api/me").get_json()
+        assert me["loans_remaining"] == 3 and me["borrow_block_reason"] is None
+        c.post("/api/loans", json={"item_id": "B1"})
+        loan = c.get("/api/me/loans").get_json()["current"][0]
+        assert loan["days_left"] == 14 and loan["item_type_key"] == "book"
+        item = c.get("/api/items/B1").get_json()
+        assert item["available_now"] is False and item["actions"]["has_loan"] is True
+        assert c.get("/api/items/B2").get_json()["available_now"] is True
+
+
+def test_unavailable_labels_come_from_python() -> None:
+    with _client() as c:
+        _login(c, "S1")
+        thesis = c.get("/api/items/T1").get_json()["actions"]
+        assert thesis["unavailable_label"] == "Not available to students"
+        _login(c, "F1")
+        assert c.get("/api/items/T1").get_json()["actions"]["unavailable_label"] is None
+        c.post("/api/loans", json={"item_id": "B1"})
+        _login(c, "S1")
+        busy = c.get("/api/items/B1").get_json()["actions"]
+        assert busy["unavailable_label"] == "Not available right now" and busy["can_reserve"]
+        Library().get_user("S1").add_fine(10)
+        blocked = c.get("/api/items/B2").get_json()["actions"]
+        assert blocked["unavailable_label"] == "Borrowing paused"
+
+
+def test_route_members_for_librarians_only() -> None:
+    with _client() as c:
+        _login(c, "S1")
+        assert c.get("/api/members").status_code == 403
+        assert c.get("/api/members/F1").status_code == 403            # someone else's account
+        assert c.get("/api/members/S1/loans").status_code == 200      # their own is fine
+        _login(c, "L1")
+        members = c.get("/api/members").get_json()
+        assert [m["user_id"] for m in members] == ["S1", "S2", "F1"]  # sorted by name
+        assert c.get("/api/members/L1").status_code == 403            # librarians are not members
+        assert c.get("/api/members/NOPE").status_code == 404
+        c.post("/api/loans", json={"member_id": "F1", "item_id": "T1"})
+        loans = c.get("/api/members/F1/loans").get_json()
+        assert loans["current"][0]["member_role"] == "Faculty"
+
+
+def test_stats_recent_ranking() -> None:
+    lib, staff, s, f = _library()
+    lib.issue(staff, "S1", "B1", today=date.today() - timedelta(days=60))
+    lib.return_item(staff, "S1", "B1", today=date.today() - timedelta(days=50))
+    lib.issue(staff, "S1", "B2")
+    stats = lib.stats(staff)
+    assert [r["item_id"] for r in stats["most_borrowed_recent"]] == ["B2"]   # B1 was too long ago
+    assert {r["item_id"] for r in stats["most_borrowed"]} == {"B1", "B2"}
+    assert stats["most_borrowed_recent"][0]["type"] == "book"
+
+
+def test_no_raw_colours_outside_tokens() -> None:
+    colour = re.compile(r"#[0-9a-fA-F]{3,8}\b|rgba?\(")
+    for path in (PROJECT_ROOT / "static").rglob("*"):
+        if path.suffix in (".css", ".html", ".js") and path.name != "tokens.css":
+            text = path.read_text(encoding="utf-8")
+            assert not colour.search(text), f"raw colour in {path.relative_to(PROJECT_ROOT)}"
 
 
 # ---------- runner ----------

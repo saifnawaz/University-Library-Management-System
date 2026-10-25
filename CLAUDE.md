@@ -28,6 +28,7 @@ services/      # Library, FinePolicy, ItemFactory, NotificationCenter,
 storage/       # Repository, database setup
 exceptions.py
 app.py         # Flask routes only
+seed.py        # demo data (python seed.py, or --reset to replace)
 static/        # HTML, CSS, JS
 tests/         # smoke tests, extended each phase
 docs/mockups/  # UI mockups to match in Phase 7

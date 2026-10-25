@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Classic · Catalog</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600&amp;family=Source+Sans+3:wght@400;600&amp;display=swap">
+<style>
+body{margin:0}
+a{color:#2A1F16}a:hover{color:#7A2E12}
+</style>
+</helmet>
+<div style="min-height: 900px; font-family: 'Source Sans 3', system-ui, sans-serif; background: #F5EFE3; color: #2A1F16">
+<header style="border-bottom: 1px solid #D9CDB8; background: #FBF7EF">
+<div style="max-width: 1120px; margin: 0 auto; box-sizing: border-box; padding: 18px 32px; display: flex; flex-wrap: wrap; gap: 16px 32px; align-items: center; justify-content: space-between">
+<div style="font-family: Fraunces, Georgia, serif; font-size: 22px; font-weight: 600">The Reading Room</div>
+<nav aria-label="Main" style="display: flex; flex-wrap: wrap; gap: 4px 22px; font-size: 15px">
+<a href="#" style="text-decoration: none; padding: 10px 0">Dashboard</a>
+<a href="#" style="text-decoration: none; color: {{accent}}; font-weight: 600; border-bottom: 2px solid {{accent}}; padding: 10px 0">Catalog</a>
+<a href="#" style="text-decoration: none; padding: 10px 0">My loans</a>
+<a href="#" style="text-decoration: none; padding: 10px 0">Reservations</a>
+<a href="#" style="text-decoration: none; padding: 10px 0">Ask the librarian</a>
+</nav>
+<div style="font-size: 14px; color: #5C4A3A">Ali Raza · Student</div>
+</div>
+</header>
+<main style="max-width: 1120px; margin: 0 auto; box-sizing: border-box; padding: 36px 32px; display: flex; flex-direction: column; gap: 28px">
+<div style="display: flex; flex-wrap: wrap; gap: 16px; align-items: flex-end; justify-content: space-between">
+<h1 style="margin: 0; font-family: Fraunces, Georgia, serif; font-size: 38px; font-weight: 400">The stacks</h1>
+<div style="display: flex; flex-direction: column; gap: 4px; flex: 0 1 420px">
+<label for="cat-search" style="font-size: 13px; color: #5C4A3A">Search</label>
+<input id="cat-search" type="search" value="machine learning" style="height: 46px; box-sizing: border-box; padding: 0 16px; border: 1px solid #C9BA9F; border-radius: 4px; background: #FBF7EF; font: inherit; font-size: 15px; color: #2A1F16">
+</div>
+</div>
+<div style="display: flex; flex-wrap: wrap; gap: 32px; align-items: flex-start">
+<aside style="flex: 1 1 200px; max-width: 240px; display: flex; flex-direction: column; gap: 24px">
+<fieldset style="border: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 10px">
+<legend style="font-family: Fraunces, Georgia, serif; font-size: 18px; margin-bottom: 8px">Type</legend>
+<label style="display: flex; gap: 10px; align-items: center; font-size: 15px"><input type="checkbox" checked> Books</label>
+<label style="display: flex; gap: 10px; align-items: center; font-size: 15px"><input type="checkbox" checked> Reference books</label>
+<label style="display: flex; gap: 10px; align-items: center; font-size: 15px"><input type="checkbox" checked> E-books</label>
+<label style="display: flex; gap: 10px; align-items: center; font-size: 15px"><input type="checkbox"> Magazines</label>
+<label style="display: flex; gap: 10px; align-items: center; font-size: 15px"><input type="checkbox" checked> Theses</label>
+</fieldset>
+<fieldset style="border: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 10px">
+<legend style="font-family: Fraunces, Georgia, serif; font-size: 18px; margin-bottom: 8px">Availability</legend>
+<label style="display: flex; gap: 10px; align-items: center; font-size: 15px"><input type="radio" name="avail" checked> Everything</label>
+<label style="display: flex; gap: 10px; align-items: center; font-size: 15px"><input type="radio" name="avail"> I can borrow now</label>
+</fieldset>
+</aside>
+<section aria-label="Results" style="flex: 999 1 560px; display: flex; flex-direction: column; gap: 16px">
+<div style="font-size: 14px; color: #5C4A3A">5 results</div>
+<div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 20px">
+<article style="display: flex; flex-direction: column; gap: 8px"><div style="aspect-ratio: 2 / 3; background: #2F4A3A; border-radius: 2px; padding: 12px; box-sizing: border-box; display: flex; align-items: flex-end; color: #F5EFE3; font-family: Fraunces, Georgia, serif; font-size: 16px">Hands-On Machine Learning</div><div style="font-size: 14px; color: #5C4A3A">Aurélien Géron · Book</div><div style="font-size: 14px; font-weight: 600; color: #2F4A3A">2 of 3 available</div><button type="button" style="height: 44px; border: 1px solid {{accent}}; border-radius: 4px; background: transparent; color: {{accent}}; font: inherit; font-size: 14px; font-weight: 600; cursor: pointer">Borrow</button></article>
+<article style="display: flex; flex-direction: column; gap: 8px"><div style="aspect-ratio: 2 / 3; background: #7A2E12; border-radius: 2px; padding: 12px; box-sizing: border-box; display: flex; align-items: flex-end; color: #F5EFE3; font-family: Fraunces, Georgia, serif; font-size: 16px">Pattern Recognition and ML</div><div style="font-size: 14px; color: #5C4A3A">Christopher Bishop · Book</div><div style="font-size: 14px; font-weight: 600; color: #7A2E12">All copies issued · 1 waiting</div><button type="button" style="height: 44px; border: 1px solid #C9BA9F; border-radius: 4px; background: transparent; color: #2A1F16; font: inherit; font-size: 14px; cursor: pointer">Join waitlist</button></article>
+<article style="display: flex; flex-direction: column; gap: 8px"><div style="aspect-ratio: 2 / 3; background: #5C4A3A; border-radius: 2px; padding: 12px; box-sizing: border-box; display: flex; align-items: flex-end; color: #F5EFE3; font-family: Fraunces, Georgia, serif; font-size: 16px">Encyclopedia of Machine Learning</div><div style="font-size: 14px; color: #5C4A3A">Sammut &amp; Webb · Reference</div><div style="font-size: 14px; font-weight: 600; color: #5C4A3A">Read in library only</div><button type="button" style="height: 44px; border: 1px solid #C9BA9F; border-radius: 4px; background: transparent; color: #2A1F16; font: inherit; font-size: 14px; cursor: pointer">See shelf location</button></article>
+<article style="display: flex; flex-direction: column; gap: 8px"><div style="aspect-ratio: 2 / 3; background: #C9BA9F; border-radius: 2px; padding: 12px; box-sizing: border-box; display: flex; align-items: flex-end; color: #2A1F16; font-family: Fraunces, Georgia, serif; font-size: 16px">Deep Learning</div><div style="font-size: 14px; color: #5C4A3A">Goodfellow et al. · E-book</div><div style="font-size: 14px; font-weight: 600; color: #2F4A3A">Always available</div><button type="button" style="height: 44px; border: 1px solid {{accent}}; border-radius: 4px; background: transparent; color: {{accent}}; font: inherit; font-size: 14px; font-weight: 600; cursor: pointer">Open e-book</button></article>
+<article style="display: flex; flex-direction: column; gap: 8px"><div style="aspect-ratio: 2 / 3; background: #2A1F16; border-radius: 2px; padding: 12px; box-sizing: border-box; display: flex; align-items: flex-end; color: #F5EFE3; font-family: Fraunces, Georgia, serif; font-size: 16px">[THESIS TITLE]</div><div style="font-size: 14px; color: #5C4A3A">[AUTHOR] · Thesis</div><div style="font-size: 14px; font-weight: 600; color: #5C4A3A">Faculty borrowing only</div><button type="button" disabled style="height: 44px; border: 1px solid #D9CDB8; border-radius: 4px; background: #EFE7D8; color: #5C4A3A; font: inherit; font-size: 14px">Not available to students</button></article>
+</div>
+</section>
+</div>
+</main>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"accent":{"editor":"color","default":"#7A2E12"},"$preview":{"width":1280,"height":900}}'>
+class Component extends DCLogic {
+renderVals() {
+return { accent: this.props.accent ?? '#7A2E12' };
+}
+}
+</script>
+</body>
+</html>

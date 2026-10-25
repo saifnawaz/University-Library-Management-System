@@ -52,6 +52,9 @@ class Reservation:
             "member_name": self._member.name,
             "item_id": self._item.item_id,
             "item_title": self._item.title,
+            "item_author": self._item.author,
+            "item_type": self._item.get_item_type(),
+            "item_type_key": self._item.TYPE_KEY,
             "created_at": self._created_at.isoformat(timespec="seconds"),
             "notified": self._notified,
         }

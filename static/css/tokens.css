@@ -1,0 +1,135 @@
+/* Design tokens: the only place colours, fonts, spacing, radius and motion are defined.
+   Values follow the "Classic library" mockups in docs/mockups/.
+   Every other stylesheet uses these variables; no raw colour values anywhere else. */
+
+:root {
+  /* ---- colour: light ("paper") ---- */
+  --color-page: #F5EFE3;
+  --color-surface: #FBF7EF;
+  --color-field: #FBF7EF;              /* text inputs */
+  --color-field-bright: #FFFFFF;       /* staff desk inputs (scan or type) */
+  --color-disabled: #EFE7D8;           /* disabled buttons, skeletons */
+  --color-border: #D9CDB8;
+  --color-divider: #E8DFCF;            /* lines between table rows */
+  --color-input-border: #C9BA9F;
+  --color-text: #2A1F16;
+  --color-muted: #5C4A3A;
+
+  --color-accent: #7A2E12;             /* oxblood */
+  --color-accent-hover: #63240D;
+  --color-accent-ink: #7A2E12;         /* accent used as text */
+  --color-accent-tint: #F1E2D6;        /* soft background for warnings */
+  --color-on-accent: #FBF7EF;
+
+  --color-secondary: #2F4A3A;          /* forest */
+  --color-secondary-ink: #2F4A3A;
+  --color-secondary-tint: #E2E9DF;
+
+  /* Dark panels: login hero, librarian bar, "Ask the librarian" */
+  --color-dark: #2A1F16;
+  --color-on-dark: #F5EFE3;
+  --color-on-dark-muted: #E3D8C5;
+  --color-dark-field: #3A2D22;
+  --color-dark-field-border: #5C4A3A;
+  --color-dark-hover: rgba(245, 239, 227, 0.08);
+
+  --color-focus: #7A2E12;
+
+  /* Book covers, one colour per item type (from the mockup palette) */
+  --cover-book: #7A2E12;
+  --cover-reference: #5C4A3A;
+  --cover-ebook: #C9BA9F;
+  --cover-magazine: #2F4A3A;
+  --cover-thesis: #2A1F16;
+  --cover-text: #F5EFE3;
+  --cover-text-on-light: #2A1F16;      /* for the pale e-book cover */
+  --cover-edge: rgba(245, 239, 227, 0.18);
+
+  /* ---- type ---- */
+  --font-serif: "Fraunces", Georgia, "Times New Roman", serif;
+  --font-sans: "Source Sans 3", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --text-xs: 13px;
+  --text-sm: 14px;
+  --text-base: 15px;
+  --text-md: 17px;
+  --text-lg: 18px;
+  --text-xl: 22px;
+  --text-2xl: 32px;
+  --text-stat: 34px;
+  --text-h1: clamp(30px, 4.5vw, 40px);
+  --text-display: clamp(36px, 5.5vw, 52px);
+  --leading-tight: 1.1;
+  --leading-normal: 1.5;
+  --tracking-eyebrow: 0.12em;
+
+  /* ---- spacing ---- */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 28px;
+  --space-7: 40px;
+  --space-8: 56px;
+
+  /* ---- shape ---- */
+  --radius-sm: 2px;
+  --radius: 4px;
+  --border-width: 1px;
+  --control-height: 46px;
+  --button-height: 44px;
+
+  /* ---- layout ---- */
+  --content-width: 1120px;
+  --gutter: 16px;
+
+  /* ---- motion ---- */
+  --ease: cubic-bezier(0.2, 0.7, 0.2, 1);
+  --duration-fast: 120ms;
+  --duration: 200ms;
+}
+
+@media (min-width: 720px) {
+  :root { --gutter: 32px; }
+}
+
+/* Dark mode: a dark ground from the #2A1F16 family; same oxblood accent and serif headings.
+   theme.js sets data-theme on <html> from the saved choice or the system setting. */
+:root[data-theme="dark"] {
+  --color-page: #1E1610;
+  --color-surface: #2A1F16;
+  --color-field: #241A12;
+  --color-field-bright: #1E1610;
+  --color-disabled: #33271D;
+  --color-border: #45372B;
+  --color-divider: #3A2D22;
+  --color-input-border: #5C4A3A;
+  --color-text: #F1E8D8;
+  --color-muted: #C4B39C;
+
+  --color-accent: #7A2E12;
+  --color-accent-hover: #8E3A1A;
+  --color-accent-ink: #E3A68A;         /* oxblood is too dark to read as text on a dark ground */
+  --color-accent-tint: #3A2117;
+  --color-on-accent: #FBF7EF;
+
+  --color-secondary: #2F4A3A;
+  --color-secondary-ink: #A3C6AE;
+  --color-secondary-tint: #22302A;
+
+  --color-dark: #120D09;
+  --color-on-dark: #F1E8D8;
+  --color-on-dark-muted: #C9BA9F;
+  --color-dark-field: #2A1F16;
+  --color-dark-field-border: #45372B;
+
+  --color-focus: #E3A68A;
+  --cover-edge: rgba(245, 239, 227, 0.25);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --duration-fast: 0ms;
+    --duration: 0ms;
+  }
+}

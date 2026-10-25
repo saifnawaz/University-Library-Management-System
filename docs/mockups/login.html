@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Classic · Login</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600&amp;family=Source+Sans+3:wght@400;600&amp;display=swap">
+<style>
+body{margin:0}
+a{color:#7A2E12}a:hover{color:#2A1F16}
+</style>
+</helmet>
+<div style="min-height: 900px; display: flex; flex-wrap: wrap; font-family: 'Source Sans 3', system-ui, sans-serif; background: #F5EFE3; color: #2A1F16">
+<section style="flex: 1 1 420px; box-sizing: border-box; padding: 56px; background: #2A1F16; color: #F5EFE3; display: flex; flex-direction: column; justify-content: space-between; gap: 40px">
+<div style="font-family: Fraunces, Georgia, serif; font-size: 22px; font-weight: 600">The Reading Room</div>
+<div style="display: flex; flex-direction: column; gap: 18px; max-width: 460px">
+<h1 style="margin: 0; font-family: Fraunces, Georgia, serif; font-size: 52px; font-weight: 400; line-height: 1.05">Every book on campus, one desk away.</h1>
+<p style="margin: 0; font-size: 17px; line-height: 1.6; color: #E3D8C5">Borrow, reserve and renew from anywhere. Ask the librarian when you can’t find what you need.</p>
+</div>
+<div style="display: flex; gap: 10px" aria-hidden="true">
+<div style="width: 14px; height: 72px; background: {{accent}}"></div>
+<div style="width: 14px; height: 88px; background: #2F4A3A; align-self: flex-end"></div>
+<div style="width: 14px; height: 64px; background: #5C4A3A; align-self: flex-end"></div>
+<div style="width: 14px; height: 80px; background: #C9BA9F; align-self: flex-end"></div>
+</div>
+</section>
+<main style="flex: 1 1 420px; box-sizing: border-box; padding: 56px; display: flex; align-items: center; justify-content: center">
+<div style="width: 100%; max-width: 380px; display: flex; flex-direction: column; gap: 22px">
+<div>
+<h2 style="margin: 0; font-family: Fraunces, Georgia, serif; font-size: 32px; font-weight: 400">Sign in</h2>
+<p style="margin: 8px 0 0; font-size: 15px; color: #5C4A3A">Students, faculty and librarians all sign in here.</p>
+</div>
+<div style="display: flex; flex-direction: column; gap: 6px">
+<label for="l-id" style="font-size: 14px; font-weight: 600">Library ID</label>
+<input id="l-id" type="text" placeholder="e.g. BSAI-24-0117" style="height: 48px; box-sizing: border-box; padding: 0 16px; border: 1px solid #C9BA9F; border-radius: 4px; background: #FBF7EF; font: inherit; font-size: 15px; color: #2A1F16">
+</div>
+<div style="display: flex; flex-direction: column; gap: 6px">
+<div style="display: flex; justify-content: space-between; align-items: baseline"><label for="l-pw" style="font-size: 14px; font-weight: 600">Password</label><a href="#" style="font-size: 14px">Forgot password?</a></div>
+<input id="l-pw" type="password" style="height: 48px; box-sizing: border-box; padding: 0 16px; border: 1px solid #C9BA9F; border-radius: 4px; background: #FBF7EF; font: inherit; font-size: 15px">
+</div>
+<button type="button" style="height: 50px; border: none; border-radius: 4px; background: {{accent}}; color: #FBF7EF; font: inherit; font-size: 16px; font-weight: 600; cursor: pointer">Sign in</button>
+<p style="margin: 0; font-size: 14px; color: #5C4A3A; border-top: 1px solid #D9CDB8; padding-top: 18px">No account yet? Ask at the circulation desk.</p>
+</div>
+</main>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"accent":{"editor":"color","default":"#7A2E12"},"$preview":{"width":1280,"height":900}}'>
+class Component extends DCLogic {
+renderVals() {
+return { accent: this.props.accent ?? '#7A2E12' };
+}
+}
+</script>
+</body>
+</html>

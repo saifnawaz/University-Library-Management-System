@@ -300,3 +300,110 @@ One section per phase, added as each phase is finished.
 - **Every change saves the whole library** (`save_to()`) before the response is sent. That's simple and safe at this size.
 - **`POST /api/fines/pay` was added** although it wasn't in the endpoint list, because the UI needs fine-payment feedback. A member can pay their own fine, and a librarian can record a payment for anyone.
 - **Not built yet:** creating member accounts and changing fine rules from the API (librarian screens); serving the frontend pages (Phase 7).
+
+---
+
+## Seed data (`seed.py`)
+
+- **What it does:** Builds a demo library: 1 librarian, 2 students, 1 faculty member, 16 items across all five types, active, overdue and returned loans, a fine, and a waitlist. It then saves everything to the database and prints the demo logins.
+- **Why it goes through `Library`:** It uses only normal `Library` methods (`create_item`, `issue`, `return_item`, `reserve`), with past dates passed as `today=`. That way the demo data obeys exactly the same rules as the app. For example, loans are issued in date order, so the overdue check sees the right day.
+- **Safety:** It refuses to touch a database that already has data unless you pass `--reset` (checked with `Database.is_empty()`).
+
+---
+
+## Phase 7 (part 1): Login, member dashboard, catalog
+
+**Files:** `static/login.html`, `static/dashboard.html`, `static/catalog.html`, `static/staff.html` (placeholder), `static/css/tokens.css`, `static/css/app.css`, `static/js/{api,ui,theme,login,dashboard,catalog}.js`, `static/favicon.svg`; page routes in `app.py`.
+
+### How the frontend is organised
+- **One file of design tokens (`tokens.css`):** every colour, font, spacing step, radius and animation timing is a CSS variable. Dark mode only redefines the colour variables under `[data-theme="dark"]`. A test (`test_no_raw_colours_outside_tokens`) fails if a colour value appears anywhere else.
+- **`theme.js`:** runs in `<head>` before the page draws, picks the saved theme or the system setting, and avoids a flash of the wrong colours. The toggle saves the choice in `localStorage`; if storage is blocked, the toggle still works for that page.
+- **`api.js`:** one `fetch` wrapper. Every failure becomes an `ApiError` with the readable message from the Python exception, or a friendly message if the server can't be reached.
+- **`ui.js`:** shared helpers:
+  - `h()` builds elements. It sets text with `textContent`, never `innerHTML`, so data from the API can't inject HTML.
+  - It also provides the nav bar, toasts, loading, empty and error states, and date and money formatting.
+- **JS uses ES modules** (`import` / `export`), so each page script imports only what it needs.
+
+### The golden rule in the UI
+- **Python decides every button.** Each item from `/api/items` carries `actions` (`can_borrow`, `can_reserve`, `reason`, `has_loan`, `queue_position`). These are worked out by the same `_check_can_issue()` and `_check_can_reserve()` that the real `issue()` and `reserve()` use. JavaScript only shows a button when the flag is true.
+- **Facts the UI needs were added to Python, not worked out in JS:**
+  - `Member.to_dict()`: `loans_remaining`, `borrow_block_reason`
+  - `Loan.to_dict()`: `days_left`, `item_type_key`
+  - `describe_item()`: `available_now` (a copy is on the shelf for someone not already waiting)
+- **The banner, "Borrowing is paused · Bilal Ahmed has unpaid fines of Rs 30.", shows `borrow_block_reason` word for word.** JS never checks fines or limits itself.
+- **The only JS-side checks are convenience ones** (an empty login form). The server checks the same things again.
+
+### Screens
+- **Login:** a split layout with a decorative shelf of book spines. Errors show inline ("Wrong user id or password."). After login, the user goes to `/dashboard` (members) or `/staff` (librarians).
+- **Member dashboard:**
+  - A "can borrow" / "borrowing is paused" banner, plus four tiles: on loan, overdue, reservations and fines.
+  - The current loans list says "Due 4 Nov · in 10 days" or "Overdue by 11 days · Rs 110 so far", along with reservations ("Number 1 in line" / "Ready to collect"), notifications and the member's borrowing rules.
+  - **Role-specific:** Faculty also get a Research collection panel (theses) and "Research access" in their rules.
+- **Catalog:**
+  - Search runs on the server, debounced so it doesn't send a request on every keystroke.
+  - Filtering by type and "Available now" happens in the browser on the loaded results.
+  - Cards show a coloured book spine per type, status in words, and Borrow / Reserve buttons from `actions`.
+  - Borrowing or reserving shows a toast and refreshes just that card and the banner.
+- **States:** every screen has a loading state (skeletons), an empty state ("No items match …" with Clear search), an error state with "Try again", and toasts for success and failure.
+
+### Decisions
+- **The mockups weren't in `docs/mockups/` when part 1 was first built.** It was later reworked to match them (see "Phase 7 (part 2)" below).
+- **One HTML file per page**, each served by a route in `app.py` with no logic in it, instead of a single-page app. That's simpler to follow, and each page's script is small.
+- **Dark mode keeps oxblood for filled buttons**, but uses a lighter oxblood (`--color-accent-ink`) for text, because dark oxblood text on a dark background isn't readable.
+- **The reason text is hidden on cards when the status already explains it** (e.g. "Faculty borrowing only"). Python sets `actions.reason` to `None` in that case.
+
+---
+
+## Phase 7 (part 2): Matching the mockups, member pages, librarian pages
+
+**Files:** new pages `item.html`, `loans.html`, `reservations.html`, `staff-desk.html`, `staff-members.html`, `staff-reports.html` (and their `js/` files); new `js/actions.js`, `js/item-form.js`, `js/staff-common.js`; `tokens.css` and `app.css` reworked; small additions to `services/library.py`, `models/users.py`, `models/loan.py`, `models/reservation.py` and `app.py`.
+
+### Part 1 brought in line with `docs/mockups/`
+- **Brand and type:** the library is "The Reading Room" (the staff bar adds "· Front desk"). Page titles use Fraunces at weight 400 (40px dashboard, 38px elsewhere), section headings 22px at 600, body text 15px.
+- **Navigation:** plain text links 22px apart, with the current page in oxblood and a 2px underline.
+  - Members: Dashboard, Catalog, My loans, Reservations, Ask the librarian.
+  - Librarians: Overview, Catalog, Issue & return, Members, Reports, on the dark bar.
+- **Login:** a dark left panel with the mockup headline and four spine blocks. The right side has "Library ID", "Forgot password?", a 50px Sign in button, and the circulation-desk footnote.
+- **Stats:** a ruled strip (lines above and below) with 34px Fraunces numbers, instead of separate cards.
+- **Books:** 2:3 covers with the title on them, coloured by type from the mockup palette:
+  - book: oxblood
+  - reference: brown
+  - e-book: tan, with dark text
+  - magazine: forest
+  - thesis: ink
+- **One button per book:**
+  - **Borrow:** oxblood outline
+  - **Join waitlist:** neutral outline
+  - **Disabled grey button with a short label:** for any other case, e.g. "Not available to students"
+- **Catalog:** "The stacks" heading, the search box on the right, and a sidebar with type checkboxes and an availability radio ("Everything" / "I can borrow now").
+- **Colours added from the mockups:** `#E3D8C5` (muted text on dark), `#3A2D22` (inputs on dark), `#E8DFCF` (table row lines), `#EFE7D8` (disabled), `#FFFFFF` (staff desk inputs). All are tokens.
+
+### New pages
+- **Item detail (`/catalog/<id>`):** a large cover, the facts as a definition list, the status in words, and the same single action as the catalog, plus the full reason in words. Librarians get "Withdraw from catalog", which needs a second click to confirm.
+- **My loans (`/loans`):** a stat strip, current loans ("Due in 10 days" / "Overdue by 11 days · Rs 110 so far"), a fines panel with a payment form, the member's borrowing rules, and a history table.
+- **Reservations (`/reservations`):** place in line or "Ready to collect", a Cancel button, and notifications.
+- **Librarian overview (`/staff`):** today's numbers, a Quick issue panel (Member ID + Item ID → Issue or Return), the overdue table, and "Most borrowed, last 30 days" drawn as a row of book blocks whose height shows how often each was borrowed.
+- **Issue & return (`/staff/desk`):** look up a member and see their loans with Return buttons, an issue box, fine payment, and their reservations with Cancel.
+- **Members (`/staff/members`):** every member with loans, overdue items, fines and whether they can borrow, filtered in the browser.
+- **Reports (`/staff/reports`):** collection and membership counts, every overdue loan, and most borrowed of all time.
+- **Catalog for librarians:** an "Add an item" form. JS only shows the extra field for the chosen type (ISBN, file format, issue or supervisor); `ItemFactory` validates everything.
+
+### Python additions so JS still decides no rules
+- **`actions.unavailable_label`:** the short text for a disabled button. Python picks it from which rule said no:
+  - the item's own restriction → `"Not available to students"`, using the new polymorphic `User.get_role_plural()`; `Faculty` overrides it to return "faculty"
+  - fines, overdue items or the limit → `"Borrowing paused"`
+  - no free copy → `"Not available right now"`
+- **`Library.list_members()`:** librarians only.
+- **`Library.stats()`:** adds `most_borrowed_recent` (the last `RECENT_DAYS` = 30 days), each entry with its type for the cover colour.
+- **New API routes:** `/api/members`, `/api/members/<id>`, `/api/members/<id>/loans` and `/api/members/<id>/reservations`. A member can open their own account; a librarian can open anyone's. `Library` decides which, as before.
+- **More fields in JSON:** `Member.to_dict()` adds `overdue_loans`; `Loan.to_dict()` adds `item_author` and `member_role`; `Reservation.to_dict()` adds `item_author` and the item type.
+- **E-book status:** now reads "Always available" (mockup wording).
+
+### Decisions
+- **"Picked for you" waits for the recommender (Phase 8).** Until then the dashboard shows "Ready to borrow" (students) or "From the research collection" (faculty). Each is built from the catalog's own `actions`, so nothing is invented.
+- **The "Ask the librarian" panel is in place but switched off**, with the note "Coming soon". It will be connected in Phase 9.
+- **Mockup text was changed where it promised something the app can't do:**
+  - "renew" is gone from the login text.
+  - "See shelf location" and "Open e-book" aren't used.
+  - "Forgot password?" says to ask at the circulation desk.
+- **Pages use `startPage("member" | "staff" | "any")`** so a librarian opening a member page (or the other way round) is sent to their own home page. The API still checks permissions on every request.

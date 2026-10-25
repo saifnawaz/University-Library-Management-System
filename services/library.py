@@ -6,8 +6,8 @@ from collections import Counter
 from datetime import date, timedelta
 from typing import Any
 
-from exceptions import (ItemNotAvailable, LibraryException, NotAuthenticated, NotFound,
-                        PermissionDenied)
+from exceptions import (ItemNotAvailable, LibraryException, LimitExceeded, NotAuthenticated,
+                        NotFound, OverdueLoans, PermissionDenied, UnpaidFines)
 from models.items import LibraryItem
 from models.loan import Loan
 from models.reservation import Reservation
@@ -27,6 +27,7 @@ class Library:
     """
 
     _instance: Library | None = None
+    RECENT_DAYS: int = 30  # window for "most borrowed recently" on the staff dashboard
 
     def __new__(cls) -> Library:
         """Create the object the first time; afterwards return the same one."""
@@ -280,7 +281,7 @@ class Library:
             parts.append(note)
 
         if item.has_unlimited_copies():
-            parts.append("Available online")
+            parts.append("Always available")
         else:
             free = item.available_copies - waiting  # copies not held for the waitlist
             if free > 0:
@@ -302,11 +303,15 @@ class Library:
                       today: date | None = None) -> dict[str, Any]:
         """Item data for the UI, plus status in words and (for members) allowed actions."""
         data = item.to_dict()
+        waiting = len(self.get_waitlist(item.item_id))
         data.update(
             item_type=item.get_item_type(),
             restriction_note=item.get_restriction_note(),
             status_text=self.get_status_text(item.item_id),
-            waiting=len(self.get_waitlist(item.item_id)),
+            waiting=waiting,
+            # A copy is on the shelf for someone not already waiting (UI colour and filter).
+            available_now=not item.withdrawn and (
+                item.has_unlimited_copies() or item.available_copies > waiting),
         )
         if isinstance(viewer, Member):
             data["actions"] = self._member_actions(viewer, item, today or date.today())
@@ -360,6 +365,8 @@ class Library:
         physical = [i for i in items if not i.has_unlimited_copies()]
         members = [u for u in self._users.values() if isinstance(u, Member)]
         active = [l for l in self._loans if not l.is_returned()]
+        since = (today or date.today()) - timedelta(days=self.RECENT_DAYS)
+        recent = Counter(l.item.item_id for l in self._loans if l.issue_date >= since)
         times_borrowed = Counter(l.item.item_id for l in self._loans)
         return {
             "titles": len(items),
@@ -371,13 +378,26 @@ class Library:
             "overdue_loans": sum(1 for l in active if l.is_overdue(today)),
             "reservations": len(self._reservations),
             "unpaid_fines": sum(m.fines for m in members),
-            "most_borrowed": [
-                {"item_id": item_id, "title": self._items[item_id].title, "times": count}
-                for item_id, count in times_borrowed.most_common(5)
-            ],
+            "most_borrowed": self._ranking(times_borrowed),
+            "recent_days": self.RECENT_DAYS,
+            "most_borrowed_recent": self._ranking(recent),
         }
 
+    def list_members(self, actor: User) -> list[Member]:
+        """Every member account, sorted by name. Librarians only."""
+        self._require_librarian(actor)
+        members = [u for u in self._users.values() if isinstance(u, Member)]
+        return sorted(members, key=lambda m: m.name.lower())
+
     # ---- private helpers ----
+
+    def _ranking(self, counts: Counter[str], top: int = 5) -> list[dict[str, Any]]:
+        """Top items from a Counter of item ids, as dicts for the API."""
+        return [
+            {"item_id": item_id, "title": self._items[item_id].title,
+             "type": self._items[item_id].TYPE_KEY, "times": count}
+            for item_id, count in counts.most_common(top)
+        ]
 
     def _check_can_issue(self, member: Member, item: LibraryItem, today: date) -> None:
         """Raise the right exception if this member may not borrow this item now."""
@@ -408,19 +428,34 @@ class Library:
         """What the member can do with this item, decided by the same checks issue/reserve use."""
         try:
             self._check_can_issue(member, item, today)
-            borrow_problem = None
+            borrow_error: LibraryException | None = None
         except LibraryException as e:
-            borrow_problem = e.message
+            borrow_error = e
         try:
             self._check_can_reserve(member, item)
             can_reserve = True
         except LibraryException:
             can_reserve = False
         waitlist = [r.member for r in self.get_waitlist(item.item_id)]
+
+        # A short label for a disabled button, and the full reason in words.
+        reason = borrow_error.message if borrow_error else None
+        if borrow_error is None:
+            label = None
+        elif not item.can_be_borrowed_by(member):
+            label = f"Not available to {member.get_role_plural()}"
+            reason = None  # the status text already says why ("Faculty borrowing only")
+        elif isinstance(borrow_error, (UnpaidFines, OverdueLoans, LimitExceeded)):
+            label = "Borrowing paused"
+        elif isinstance(borrow_error, ItemNotAvailable):
+            label = "Not available right now"
+        else:
+            label = "Not available"
         return {
-            "can_borrow": borrow_problem is None,
+            "can_borrow": borrow_error is None,
             "can_reserve": can_reserve,
-            "reason": borrow_problem,  # why borrowing is not possible, in words
+            "reason": reason,              # why borrowing is not possible, in words
+            "unavailable_label": label,    # short text for a disabled button
             "has_loan": member.has_loan_of(item.item_id),
             "queue_position": waitlist.index(member) + 1 if member in waitlist else None,
         }

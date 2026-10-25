@@ -102,6 +102,13 @@ class Database:
             if column not in existing:
                 self._conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
 
+    def is_empty(self) -> bool:
+        """Return True if no users or items have been saved yet."""
+        for table in ("users", "items"):
+            if self._conn.execute(f"SELECT 1 FROM {table} LIMIT 1").fetchone():
+                return False
+        return True
+
     @property
     def path(self) -> str:
         """Path of the database file."""

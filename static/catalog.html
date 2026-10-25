@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Catalog · The Reading Room</title>
+  <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
+  <script src="/static/js/theme.js"></script>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600&family=Source+Sans+3:wght@400;600&display=swap">
+  <link rel="stylesheet" href="/static/css/tokens.css">
+  <link rel="stylesheet" href="/static/css/app.css">
+</head>
+<body>
+  <header id="topnav" class="topnav"></header>
+  <main class="page container" id="main">
+    <div class="page-head catalog-head">
+      <h1>The stacks</h1>
+      <div class="row" style="flex: 0 1 520px; align-items: flex-end;">
+        <div class="field quiet" style="flex: 1 1 260px;">
+          <label for="search">Search</label>
+          <input class="input" id="search" type="search" placeholder="Title, author or subject" autocomplete="off">
+        </div>
+        <div id="staff-slot"></div>
+      </div>
+    </div>
+
+    <div id="add-slot"></div>
+    <div id="notice-slot"></div>
+
+    <div class="catalog-layout">
+      <aside class="filters" aria-label="Filters">
+        <fieldset id="type-filters">
+          <legend>Type</legend>
+        </fieldset>
+        <fieldset>
+          <legend>Availability</legend>
+          <label class="check"><input type="radio" name="avail" value="all" checked> Everything</label>
+          <label class="check"><input type="radio" name="avail" value="now"> <span id="avail-now-label">I can borrow now</span></label>
+        </fieldset>
+      </aside>
+      <section class="results" aria-label="Results">
+        <div class="result-count" id="result-count" aria-live="polite"></div>
+        <div id="results"></div>
+      </section>
+    </div>
+  </main>
+  <script type="module" src="/static/js/catalog.js"></script>
+</body>
+</html>

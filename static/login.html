@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Sign in · The Reading Room</title>
+  <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
+  <script src="/static/js/theme.js"></script>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600&family=Source+Sans+3:wght@400;600&display=swap">
+  <link rel="stylesheet" href="/static/css/tokens.css">
+  <link rel="stylesheet" href="/static/css/app.css">
+</head>
+<body>
+  <div class="login">
+    <section class="login-hero" aria-label="About the library">
+      <div class="brand">The Reading Room</div>
+      <div class="copy">
+        <h1>Every book on campus, one desk away.</h1>
+        <p>Borrow, reserve and keep track of your loans from anywhere. Ask the librarian when you can’t find what you need.</p>
+      </div>
+      <div class="spines" aria-hidden="true"><span></span><span></span><span></span><span></span></div>
+    </section>
+
+    <main class="login-main">
+      <div class="login-corner" id="theme-slot"></div>
+      <form class="login-form" id="login-form" novalidate>
+        <div>
+          <h2>Sign in</h2>
+          <p class="intro">Students, faculty and librarians all sign in here.</p>
+        </div>
+        <div class="form-error" id="form-error" role="alert" hidden></div>
+        <div class="field">
+          <label for="user-id">Library ID</label>
+          <input class="input input-lg" id="user-id" name="user_id" placeholder="e.g. stu01"
+                 autocomplete="username" autocapitalize="none" spellcheck="false" required>
+        </div>
+        <div class="field">
+          <div class="label-row">
+            <label class="field-label" for="password">Password</label>
+            <a href="#" id="forgot">Forgot password?</a>
+          </div>
+          <input class="input input-lg" id="password" name="password" type="password"
+                 autocomplete="current-password" required>
+        </div>
+        <button class="btn btn-primary btn-lg btn-block" id="submit" type="submit">Sign in</button>
+        <p class="footnote">No account yet? Ask at the circulation desk.</p>
+      </form>
+    </main>
+  </div>
+  <script type="module" src="/static/js/login.js"></script>
+</body>
+</html>
