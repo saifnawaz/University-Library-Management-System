@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from models.items import LibraryItem
@@ -44,6 +44,17 @@ class Reservation:
     def mark_notified(self) -> None:
         """Record that the member has been told a copy is held for them."""
         self._notified = True
+
+    def to_dict(self) -> dict[str, Any]:
+        """Reservation data for the web API."""
+        return {
+            "member_id": self._member.user_id,
+            "member_name": self._member.name,
+            "item_id": self._item.item_id,
+            "item_title": self._item.title,
+            "created_at": self._created_at.isoformat(timespec="seconds"),
+            "notified": self._notified,
+        }
 
     def __lt__(self, other: object) -> bool:
         """Earlier reservation is 'smaller', so sorted(reservations) gives waitlist order."""

@@ -58,6 +58,8 @@ class ItemFactory:
             "year": ItemFactory._to_int(data["year"], "year"),
             "subject": str(data.get("subject") or ""),
             "description": str(data.get("description") or ""),
+            # The database stores 0/1; JSON may send true/false.
+            "withdrawn": data.get("withdrawn") in (True, 1, "1", "true"),
         }
         # Check for None/"" explicitly: "or 1" would wrongly turn 0 into 1.
         copies = data.get("total_copies")

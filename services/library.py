@@ -2,13 +2,17 @@
 
 from __future__ import annotations
 
+from collections import Counter
 from datetime import date, timedelta
+from typing import Any
 
-from exceptions import ItemNotAvailable, LibraryException, NotFound, PermissionDenied
+from exceptions import (ItemNotAvailable, LibraryException, NotAuthenticated, NotFound,
+                        PermissionDenied)
 from models.items import LibraryItem
 from models.loan import Loan
 from models.reservation import Reservation
 from models.users import Member, User
+from services.item_factory import ItemFactory
 from services.notification_center import NotificationCenter
 from storage.database import Database
 from storage.repositories import (ItemRepository, LoanRepository, ReservationRepository,
@@ -106,32 +110,38 @@ class Library:
             raise ValueError(f"An item with id {item.item_id!r} already exists.")
         self._items[item.item_id] = item
 
-    def remove_item(self, actor: User, item_id: str) -> None:
-        """Remove an item from the catalog. Librarians only; refused while any copy is on loan.
+    def create_item(self, actor: User, data: dict[str, Any]) -> LibraryItem:
+        """Build an item from plain data (e.g. a form) with ItemFactory and add it. Librarians only."""
+        self._require_librarian(actor)
+        item = ItemFactory.create(data)
+        self.add_item(actor, item)
+        return item
 
-        Its reservations are cancelled (waiting members are told) and its past
-        loans are removed from members' history.
+    def withdraw_item(self, actor: User, item_id: str) -> LibraryItem:
+        """Take an item out of the catalog (soft delete). Librarians only.
+
+        Refused while any copy is on loan. The item stays saved, so loan history
+        still points to it; it is just hidden from search and the catalog.
+        Its reservations are cancelled and the waiting members are told.
         """
         self._require_librarian(actor)
         item = self.get_item(item_id)
+        if item.withdrawn:
+            raise LibraryException(f'"{item.title}" is already withdrawn.')
         on_loan = [l for l in self._loans if l.item.item_id == item_id and not l.is_returned()]
         if on_loan:
             raise LibraryException(
-                f'Cannot remove "{item.title}": {len(on_loan)} copy/copies still on loan.'
+                f'Cannot withdraw "{item.title}": {len(on_loan)} copy/copies still on loan.'
             )
 
         for reservation in self.get_waitlist(item_id):
             reservation.member.receive_notification(
-                f'"{item.title}" was removed from the catalog, so your reservation was cancelled.'
+                f'"{item.title}" was withdrawn from the catalog, so your reservation was cancelled.'
             )
             self._notifications.unsubscribe(item_id, reservation.member)
         self._reservations = [r for r in self._reservations if r.item.item_id != item_id]
-
-        for loan in self._loans:
-            if loan.item.item_id == item_id:
-                loan.member.remove_history_for(item_id)
-        self._loans = [l for l in self._loans if l.item.item_id != item_id]
-        del self._items[item_id]
+        item.withdraw()
+        return item
 
     def add_user(self, user: User) -> None:
         """Register a user account."""
@@ -153,9 +163,19 @@ class Library:
             raise NotFound(f"No user with id {user_id!r}.")
         return user
 
-    def all_items(self) -> list[LibraryItem]:
-        """All items, sorted by title."""
-        return sorted(self._items.values())
+    def all_items(self, include_withdrawn: bool = False) -> list[LibraryItem]:
+        """All items in the catalog, sorted by title. Withdrawn items only if asked for."""
+        return sorted(i for i in self._items.values() if include_withdrawn or not i.withdrawn)
+
+    def authenticate(self, user_id: str, password: str) -> User:
+        """Return the user if the id and password match, else raise NotAuthenticated.
+
+        The message never says which of the two was wrong.
+        """
+        user = self._users.get(user_id.strip())
+        if user is None or not user.check_password(password):
+            raise NotAuthenticated("Wrong user id or password.")
+        return user
 
     # ---- issue and return ----
 
@@ -170,15 +190,7 @@ class Library:
         member = self._get_member(member_id)
         self._require_self_or_librarian(actor, member)
         item = self.get_item(item_id)
-
-        if not item.can_be_borrowed_by(member):
-            reason = item.get_restriction_note() or "Not available for borrowing"
-            raise PermissionDenied(f'"{item.title}" cannot be borrowed: {reason}.')
-        member.check_can_borrow(today)
-        if member.has_loan_of(item_id):
-            raise LibraryException(f'{member.name} already has "{item.title}" on loan.')
-        if not self._has_copy_for(member, item):
-            raise ItemNotAvailable(self._unavailable_message(item))
+        self._check_can_issue(member, item, today)
 
         # All checks passed: now change state.
         item.checkout_copy()
@@ -216,16 +228,7 @@ class Library:
         member = self._get_member(member_id)
         self._require_self_or_librarian(actor, member)
         item = self.get_item(item_id)
-
-        if not item.can_be_borrowed_by(member):
-            reason = item.get_restriction_note() or "Not available for borrowing"
-            raise PermissionDenied(f'"{item.title}" cannot be reserved: {reason}.')
-        if any(r.member is member for r in self.get_waitlist(item_id)):
-            raise LibraryException(f'{member.name} has already reserved "{item.title}".')
-        if member.has_loan_of(item_id):
-            raise LibraryException(f'{member.name} already has "{item.title}" on loan.')
-        if self._has_copy_for(member, item):
-            raise LibraryException(f'A copy of "{item.title}" is available now. Borrow it instead.')
+        self._check_can_reserve(member, item)
 
         reservation = Reservation(member, item)
         self._reservations.append(reservation)
@@ -258,7 +261,7 @@ class Library:
         """
         words = query.lower().split()
         results = []
-        for item in self._items.values():
+        for item in self.all_items():  # withdrawn items are never found
             text = f"{item.title} {item.author} {item.subject}".lower()
             if all(word in text for word in words):
                 results.append(item)
@@ -267,6 +270,8 @@ class Library:
     def get_status_text(self, item_id: str) -> str:
         """Item status in words for the UI, e.g. 'All copies issued · 1 waiting'."""
         item = self.get_item(item_id)
+        if item.withdrawn:
+            return "Withdrawn from the catalog"
         waiting = len(self.get_waitlist(item_id))
         parts: list[str] = []
 
@@ -289,7 +294,141 @@ class Library:
             parts.append(f"{waiting} waiting")
         return " · ".join(parts)
 
+    # ---- views for the web API ----
+    # Models describe themselves with to_dict(); these add what only Library
+    # knows (status text, waitlist position, what the viewer is allowed to do).
+
+    def describe_item(self, item: LibraryItem, viewer: User,
+                      today: date | None = None) -> dict[str, Any]:
+        """Item data for the UI, plus status in words and (for members) allowed actions."""
+        data = item.to_dict()
+        data.update(
+            item_type=item.get_item_type(),
+            restriction_note=item.get_restriction_note(),
+            status_text=self.get_status_text(item.item_id),
+            waiting=len(self.get_waitlist(item.item_id)),
+        )
+        if isinstance(viewer, Member):
+            data["actions"] = self._member_actions(viewer, item, today or date.today())
+        return data
+
+    def catalog(self, viewer: User, query: str = "") -> list[dict[str, Any]]:
+        """Search results described for the viewer. Withdrawn items are left out."""
+        return [self.describe_item(item, viewer) for item in self.search(query)]
+
+    def item_details(self, viewer: User, item_id: str) -> dict[str, Any]:
+        """One item described for the viewer. Withdrawn items are visible to librarians only."""
+        item = self.get_item(item_id)
+        if item.withdrawn and not viewer.can_manage_library():
+            raise NotFound(f"No item with id {item_id!r}.")
+        return self.describe_item(item, viewer)
+
+    def get_member(self, actor: User, member_id: str) -> Member:
+        """A member's account: their own, or anyone's for a librarian."""
+        member = self._get_member(member_id)
+        self._require_self_or_librarian(actor, member)
+        return member
+
+    def reservations_for(self, actor: User, member_id: str) -> list[dict[str, Any]]:
+        """A member's reservations, oldest first, with their place in each waitlist."""
+        member = self.get_member(actor, member_id)
+        result = []
+        for reservation in sorted(r for r in self._reservations if r.member is member):
+            waitlist = self.get_waitlist(reservation.item.item_id)
+            data = reservation.to_dict()
+            data["position"] = waitlist.index(reservation) + 1
+            data["ready"] = reservation.notified  # a copy is held for them
+            result.append(data)
+        return result
+
+    def pay_fine(self, actor: User, member_id: str, amount: float) -> Member:
+        """Record a fine payment for a member (their own, or anyone's for a librarian)."""
+        member = self.get_member(actor, member_id)
+        member.pay_fine(amount)
+        return member
+
+    def overdue_loans(self, actor: User, today: date | None = None) -> list[Loan]:
+        """All loans still out past their due date, most overdue first. Librarians only."""
+        self._require_librarian(actor)
+        overdue = [l for l in self._loans if not l.is_returned() and l.is_overdue(today)]
+        return sorted(overdue, key=lambda loan: loan.due_date)
+
+    def stats(self, actor: User, today: date | None = None) -> dict[str, Any]:
+        """Numbers for the librarian dashboard. Librarians only."""
+        self._require_librarian(actor)
+        items = self.all_items()
+        physical = [i for i in items if not i.has_unlimited_copies()]
+        members = [u for u in self._users.values() if isinstance(u, Member)]
+        active = [l for l in self._loans if not l.is_returned()]
+        times_borrowed = Counter(l.item.item_id for l in self._loans)
+        return {
+            "titles": len(items),
+            "titles_by_type": dict(Counter(i.get_item_type() for i in items)),
+            "copies": sum(i.total_copies for i in physical),
+            "copies_on_loan": sum(i.total_copies - i.available_copies for i in physical),
+            "members_by_role": dict(Counter(m.get_role() for m in members)),
+            "active_loans": len(active),
+            "overdue_loans": sum(1 for l in active if l.is_overdue(today)),
+            "reservations": len(self._reservations),
+            "unpaid_fines": sum(m.fines for m in members),
+            "most_borrowed": [
+                {"item_id": item_id, "title": self._items[item_id].title, "times": count}
+                for item_id, count in times_borrowed.most_common(5)
+            ],
+        }
+
     # ---- private helpers ----
+
+    def _check_can_issue(self, member: Member, item: LibraryItem, today: date) -> None:
+        """Raise the right exception if this member may not borrow this item now."""
+        self._require_in_catalog(item)
+        if not item.can_be_borrowed_by(member):
+            reason = item.get_restriction_note() or "Not available for borrowing"
+            raise PermissionDenied(f'"{item.title}" cannot be borrowed: {reason}.')
+        member.check_can_borrow(today)
+        if member.has_loan_of(item.item_id):
+            raise LibraryException(f'{member.name} already has "{item.title}" on loan.')
+        if not self._has_copy_for(member, item):
+            raise ItemNotAvailable(self._unavailable_message(item))
+
+    def _check_can_reserve(self, member: Member, item: LibraryItem) -> None:
+        """Raise the right exception if this member may not reserve this item now."""
+        self._require_in_catalog(item)
+        if not item.can_be_borrowed_by(member):
+            reason = item.get_restriction_note() or "Not available for borrowing"
+            raise PermissionDenied(f'"{item.title}" cannot be reserved: {reason}.')
+        if any(r.member is member for r in self.get_waitlist(item.item_id)):
+            raise LibraryException(f'{member.name} has already reserved "{item.title}".')
+        if member.has_loan_of(item.item_id):
+            raise LibraryException(f'{member.name} already has "{item.title}" on loan.')
+        if self._has_copy_for(member, item):
+            raise LibraryException(f'A copy of "{item.title}" is available now. Borrow it instead.')
+
+    def _member_actions(self, member: Member, item: LibraryItem, today: date) -> dict[str, Any]:
+        """What the member can do with this item, decided by the same checks issue/reserve use."""
+        try:
+            self._check_can_issue(member, item, today)
+            borrow_problem = None
+        except LibraryException as e:
+            borrow_problem = e.message
+        try:
+            self._check_can_reserve(member, item)
+            can_reserve = True
+        except LibraryException:
+            can_reserve = False
+        waitlist = [r.member for r in self.get_waitlist(item.item_id)]
+        return {
+            "can_borrow": borrow_problem is None,
+            "can_reserve": can_reserve,
+            "reason": borrow_problem,  # why borrowing is not possible, in words
+            "has_loan": member.has_loan_of(item.item_id),
+            "queue_position": waitlist.index(member) + 1 if member in waitlist else None,
+        }
+
+    @staticmethod
+    def _require_in_catalog(item: LibraryItem) -> None:
+        if item.withdrawn:
+            raise ItemNotAvailable(f'"{item.title}" has been withdrawn from the catalog.')
 
     def _get_member(self, user_id: str) -> Member:
         """Return the user as a Member, or raise if they are not one (e.g. a Librarian)."""

@@ -25,6 +25,7 @@ CREATE TABLE IF NOT EXISTS items (
     description      TEXT NOT NULL DEFAULT '',
     total_copies     INTEGER,            -- NULL for e-books (unlimited)
     available_copies INTEGER,
+    withdrawn        INTEGER NOT NULL DEFAULT 0, -- 1 = hidden from the catalog
     extra            TEXT NOT NULL DEFAULT '{}'  -- JSON: isbn, supervisor, ...
 );
 
@@ -60,6 +61,12 @@ CREATE TABLE IF NOT EXISTS reservations (
 );
 """
 
+# Columns added after the first version: (table, column, SQL type and default).
+# A database file made before they existed gets them added when it is opened.
+ADDED_COLUMNS = [
+    ("items", "withdrawn", "INTEGER NOT NULL DEFAULT 0"),
+]
+
 
 def default_db_path() -> str:
     """DB file path: LIBRARY_DB_PATH from .env, or library.db in the project folder.
@@ -86,6 +93,14 @@ class Database:
         self._conn.row_factory = sqlite3.Row  # rows can be read by column name
         self._conn.execute("PRAGMA foreign_keys = ON")
         self._conn.executescript(SCHEMA)
+        self._add_missing_columns()
+
+    def _add_missing_columns(self) -> None:
+        """Bring an older database file up to date with ADDED_COLUMNS."""
+        for table, column, definition in ADDED_COLUMNS:
+            existing = {row["name"] for row in self._conn.execute(f"PRAGMA table_info({table})")}
+            if column not in existing:
+                self._conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
 
     @property
     def path(self) -> str:

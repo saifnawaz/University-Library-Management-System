@@ -496,28 +496,34 @@ def test_status_text() -> None:
     assert lib.get_status_text("B1") == "All copies issued"
 
 
-def test_remove_item() -> None:
+def test_withdraw_item_is_a_soft_delete() -> None:
     lib, staff, s, f = _library()
     lib.issue(staff, "S1", "B1")
-    _expect(PermissionDenied, lib.remove_item, s, "B2")              # not a librarian
-    e = _expect(LibraryException, lib.remove_item, staff, "B1")      # on loan
+    _expect(PermissionDenied, lib.withdraw_item, s, "B2")            # not a librarian
+    e = _expect(LibraryException, lib.withdraw_item, staff, "B1")    # on loan
     assert "on loan" in str(e)
     lib.return_item(staff, "S1", "B1")
-    assert len(s.history) == 1
-    lib.remove_item(staff, "B1")                                     # all copies back: ok
-    _expect(NotFound, lib.get_item, "B1")
-    assert s.history == []                                           # past loan forgotten
-    assert "B1" not in [i.item_id for i in lib.search("")]
+    lib.withdraw_item(staff, "B1")                                   # all copies back: ok
+
+    assert lib.get_item("B1").withdrawn                              # still exists...
+    assert [l.item.item_id for l in s.history] == ["B1"]             # ...so history is kept
+    assert "B1" not in [i.item_id for i in lib.search("")]           # hidden from search
+    assert "B1" not in [i.item_id for i in lib.all_items()]          # hidden from catalog
+    assert "B1" in [i.item_id for i in lib.all_items(include_withdrawn=True)]
+    assert lib.get_status_text("B1") == "Withdrawn from the catalog"
+    _expect(ItemNotAvailable, lib.issue, staff, "F1", "B1")          # cannot be borrowed
+    _expect(ItemNotAvailable, lib.reserve, f, "F1", "B1")            # or reserved
+    _expect(LibraryException, lib.withdraw_item, staff, "B1")        # already withdrawn
 
 
-def test_remove_item_cancels_reservations() -> None:
+def test_withdraw_item_cancels_reservations() -> None:
     lib, staff, s, f = _library()
     lib.issue(staff, "F1", "B1")
     lib.reserve(s, "S1", "B1")
     lib.return_item(staff, "F1", "B1")                                # copy held for S1
-    lib.remove_item(staff, "B1")
+    lib.withdraw_item(staff, "B1")
     assert lib.get_waitlist("B1") == []
-    assert "removed from the catalog" in s.notifications[-1]
+    assert "withdrawn from the catalog" in s.notifications[-1]
 
 
 def test_cancel_reservation() -> None:
@@ -625,16 +631,38 @@ def test_restart_keeps_state() -> None:
 def test_save_replaces_old_data() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         db = Database(os.path.join(tmp, "test.db"))
-        lib, staff, *_ = _library()
+        lib, staff, s, f = _library()
+        lib.issue(staff, "S1", "M1")
         lib.save_to(db)
-        lib.remove_item(staff, "M1")
-        lib.save_to(db)
+        lib.return_item(staff, "S1", "M1")
+        lib.withdraw_item(staff, "M1")
+        lib.save_to(db)                                 # second save replaces the first
         Library.reset()
         fresh = Library()
         fresh.load_from(db)
         db.close()
-        _expect(NotFound, fresh.get_item, "M1")
+        assert fresh.get_item("M1").withdrawn           # withdrawn flag survives a restart
         assert len(fresh.all_items()) == 5
+        assert [l.item.item_id for l in fresh.get_user("S1").history] == ["M1"]
+
+
+def test_old_database_gets_withdrawn_column() -> None:
+    import sqlite3
+    with tempfile.TemporaryDirectory() as tmp:
+        path = os.path.join(tmp, "old.db")
+        conn = sqlite3.connect(path)                    # an items table from before Phase 6
+        conn.execute("CREATE TABLE items (item_id TEXT PRIMARY KEY, type TEXT NOT NULL, "
+                     "title TEXT NOT NULL, author TEXT NOT NULL, year INTEGER NOT NULL, "
+                     "subject TEXT NOT NULL DEFAULT '', description TEXT NOT NULL DEFAULT '', "
+                     "total_copies INTEGER, available_copies INTEGER, "
+                     "extra TEXT NOT NULL DEFAULT '{}')")
+        conn.execute("INSERT INTO items VALUES ('B1','book','T','A',2020,'','',1,1,'{}')")
+        conn.commit()
+        conn.close()
+        db = Database(path)
+        item = ItemRepository(db).find("B1")
+        db.close()
+        assert item is not None and not item.withdrawn
 
 
 def test_repository_crud() -> None:
@@ -698,6 +726,190 @@ def test_no_sql_outside_storage() -> None:
         if rel.parts[0] in ("storage", "tests", ".venv", "venv"):
             continue
         assert not sql.search(path.read_text(encoding="utf-8")), f"SQL found in {rel}"
+
+
+# ---------- Phase 6: Flask routes ----------
+
+from collections.abc import Iterator
+from contextlib import contextmanager
+
+from app import create_app
+
+
+@contextmanager
+def _client() -> Iterator[Any]:
+    """A Flask test client for an app whose database holds the _library() data."""
+    with tempfile.TemporaryDirectory() as tmp:
+        path = os.path.join(tmp, "app.db")
+        lib, *_ = _library()
+        lib.add_user(Student("S2", "Bilal", User.hash_password("pw")))
+        db = Database(path)
+        lib.save_to(db)
+        db.close()
+        Library.reset()
+        app = create_app(db_path=path, secret_key="test-secret")
+        app.config["DB_PATH"] = path
+        yield app.test_client()
+        Library.reset()
+
+
+def _login(client: Any, user_id: str, password: str = "pw") -> Any:
+    return client.post("/api/login", json={"user_id": user_id, "password": password})
+
+
+def _error(response: Any) -> dict[str, str]:
+    """The error part of a JSON error response, checking its shape."""
+    data = response.get_json()
+    assert set(data) == {"error"} and set(data["error"]) == {"type", "message"}, data
+    return data["error"]
+
+
+def test_route_login_logout_and_me() -> None:
+    with _client() as c:
+        assert c.get("/api/me").status_code == 401
+        r = _login(c, "S1", "wrong")
+        assert r.status_code == 401 and _error(r)["message"] == "Wrong user id or password."
+        r = _login(c, "S1")
+        assert r.status_code == 200 and r.get_json()["role"] == "Student"
+        me = c.get("/api/me").get_json()
+        assert me["user_id"] == "S1" and me["borrow_limit"] == 3
+        assert "password_hash" not in me
+        assert c.post("/api/logout").status_code == 200
+        assert c.get("/api/me").status_code == 401
+
+
+def test_route_catalog_and_item_detail() -> None:
+    with _client() as c:
+        assert c.get("/api/items").status_code == 401                  # must log in
+        _login(c, "S1")
+        items = c.get("/api/items?q=deep").get_json()
+        assert [i["item_id"] for i in items] == ["B2"]
+        assert items[0]["status_text"] == "3 of 3 available"
+        assert items[0]["actions"]["can_borrow"] is True
+        thesis = c.get("/api/items/T1").get_json()
+        assert thesis["actions"]["can_borrow"] is False                 # decided in Python
+        assert "Faculty borrowing only" in thesis["actions"]["reason"]
+        r = c.get("/api/items/NOPE")
+        assert r.status_code == 404 and _error(r)["type"] == "NotFound"
+
+
+def test_route_borrow_return_and_my_loans() -> None:
+    with _client() as c:
+        _login(c, "S1")
+        r = c.post("/api/loans", json={"item_id": "B2"})
+        assert r.status_code == 201 and r.get_json()["due_date"]
+        r = c.post("/api/loans", json={"item_id": "T1"})
+        assert r.status_code == 403 and _error(r)["type"] == "PermissionDenied"
+        r = c.post("/api/loans", json={"item_id": "B2", "member_id": "F1"})
+        assert r.status_code == 403                                     # not their account
+        c.post("/api/loans", json={"item_id": "E1"})
+        c.post("/api/loans", json={"item_id": "M1"})
+        r = c.post("/api/loans", json={"item_id": "B1"})
+        assert r.status_code == 409 and _error(r)["type"] == "LimitExceeded"
+        loans = c.get("/api/me/loans").get_json()
+        assert len(loans["current"]) == 3 and loans["fine_policy"].startswith("Rs 10")
+        assert c.post("/api/loans/return", json={"item_id": "B2"}).status_code == 200
+        loans = c.get("/api/me/loans").get_json()
+        assert len(loans["current"]) == 2 and len(loans["history"]) == 1
+
+
+def test_route_changes_are_saved() -> None:
+    with _client() as c:
+        _login(c, "S1")
+        c.post("/api/loans", json={"item_id": "B2"})
+        path = c.application.config["DB_PATH"]
+        Library.reset()                                                 # restart the app
+        c2 = create_app(db_path=path, secret_key="test-secret").test_client()
+        _login(c2, "S1")
+        assert [l["item_id"] for l in c2.get("/api/me/loans").get_json()["current"]] == ["B2"]
+
+
+def test_route_reservations_and_notifications() -> None:
+    with _client() as c:
+        _login(c, "F1")
+        c.post("/api/loans", json={"item_id": "B1"})
+        _login(c, "S1")
+        r = c.post("/api/reservations", json={"item_id": "B1"})
+        assert r.status_code == 201
+        r = c.post("/api/reservations", json={"item_id": "B2"})        # copy free
+        assert r.status_code == 400
+        assert c.get("/api/me/reservations").get_json()[0]["position"] == 1
+        _login(c, "L1")
+        c.post("/api/loans/return", json={"item_id": "B1", "member_id": "F1"})
+        _login(c, "S1")
+        assert "held for you" in c.get("/api/me/notifications").get_json()[0]
+        assert c.get("/api/me/reservations").get_json()[0]["ready"] is True
+        assert c.delete("/api/reservations/B1").status_code == 200
+        assert c.get("/api/me/reservations").get_json() == []
+        assert c.delete("/api/reservations/B1").status_code == 404
+
+
+def test_route_librarian_add_withdraw_and_reports() -> None:
+    with _client() as c:
+        new_book = {"type": "book", "item_id": "B9", "title": "Refactoring",
+                    "author": "Martin Fowler", "year": 2018, "total_copies": 2}
+        _login(c, "S1")
+        assert c.post("/api/items", json=new_book).status_code == 403  # students cannot
+        assert c.get("/api/reports/stats").status_code == 403
+        _login(c, "L1")
+        r = c.post("/api/items", json=new_book)
+        assert r.status_code == 201 and r.get_json()["status_text"] == "2 of 2 available"
+        r = c.post("/api/items", json={**new_book, "item_id": "B10", "year": "soon"})
+        assert r.status_code == 400 and _error(r)["type"] == "InvalidInput"
+        assert c.post("/api/items/B9/withdraw").status_code == 200
+        assert "B9" not in [i["item_id"] for i in c.get("/api/items").get_json()]
+        assert c.post("/api/items/B9/withdraw").status_code == 400   # already withdrawn
+
+        c.post("/api/loans", json={"item_id": "B1", "member_id": "S1"})
+        stats = c.get("/api/reports/stats").get_json()
+        assert stats["active_loans"] == 1 and stats["titles"] == 6
+        assert stats["members_by_role"] == {"Student": 2, "Faculty": 1}
+        assert c.get("/api/reports/overdue").get_json() == []          # nothing late yet
+
+
+def test_route_overdue_report() -> None:
+    with _client() as c:
+        lib = Library()
+        staff = lib.get_user("L1")
+        lib.issue(staff, "S1", "B1", today=date.today() - timedelta(days=30))
+        _login(c, "L1")
+        overdue = c.get("/api/reports/overdue").get_json()
+        assert [l["item_id"] for l in overdue] == ["B1"]
+        assert overdue[0]["days_overdue"] == 16 and overdue[0]["fine"] == 160
+
+
+def test_route_fine_payment() -> None:
+    with _client() as c:
+        lib = Library()
+        lib.get_user("S1").add_fine(50)
+        _login(c, "S1")
+        r = c.post("/api/fines/pay", json={"amount": "abc"})
+        assert r.status_code == 400 and "number" in _error(r)["message"]
+        r = c.post("/api/fines/pay", json={"amount": 80})               # more than owed
+        assert r.status_code == 400 and _error(r)["type"] == "InvalidInput"
+        r = c.post("/api/fines/pay", json={"amount": 50})
+        assert r.status_code == 200 and r.get_json()["fines"] == 0
+
+
+def test_route_bad_requests_are_clean_json() -> None:
+    with _client() as c:
+        _login(c, "S1")
+        r = c.post("/api/loans", data="not json", content_type="text/plain")
+        assert r.status_code == 400 and _error(r)["type"] == "InvalidInput"
+        r = c.post("/api/loans", json={})
+        assert r.status_code == 400 and "item_id" in _error(r)["message"]
+        r = c.get("/api/does-not-exist")
+        assert r.status_code == 404 and _error(r)["type"] == "NotFound"
+        r = c.put("/api/items")
+        assert r.status_code == 405 and _error(r)["type"] == "MethodNotAllowed"
+
+
+def test_routes_contain_no_rules() -> None:
+    source = (PROJECT_ROOT / "app.py").read_text(encoding="utf-8")
+    # (isinstance is allowed: app.py uses it only to check the shape of request JSON.)
+    for forbidden in ("can_manage_library", "can_be_borrowed_by",
+                      "check_can_borrow", "get_borrow_limit", "Librarian", "Student"):
+        assert forbidden not in source, f"app.py should not use {forbidden!r}"
 
 
 # ---------- runner ----------

@@ -25,6 +25,7 @@ class LibraryItem(ABC):
         available_copies: int | None = None,
         subject: str = "",
         description: str = "",
+        withdrawn: bool = False,
     ) -> None:
         """Create an item. available_copies defaults to total_copies (nothing issued yet)."""
         self._item_id: str = item_id
@@ -45,6 +46,7 @@ class LibraryItem(ABC):
             raise ValueError("Available copies must be between 0 and total copies.")
         self._total_copies: int = total_copies
         self._available_copies: int = available_copies
+        self._withdrawn: bool = withdrawn
 
     # ---- properties (encapsulation) ----
 
@@ -117,6 +119,17 @@ class LibraryItem(ABC):
         """Copies currently on the shelf (read-only; changes via checkout/return)."""
         return self._available_copies
 
+    @property
+    def withdrawn(self) -> bool:
+        """True if the item was taken out of the catalog (kept for loan history)."""
+        return self._withdrawn
+
+    def withdraw(self) -> None:
+        """Take the item out of the catalog. It stays saved so past loans still point to it."""
+        if self._withdrawn:
+            raise ValueError(f'"{self._title}" is already withdrawn.')
+        self._withdrawn = True
+
     # ---- rules each item type must define (abstraction) ----
 
     @abstractmethod
@@ -176,6 +189,7 @@ class LibraryItem(ABC):
             "description": self._description,
             "total_copies": self._total_copies,
             "available_copies": self._available_copies,
+            "withdrawn": self._withdrawn,
         }
 
     # ---- operator overloading ----

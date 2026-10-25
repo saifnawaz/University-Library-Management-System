@@ -10,7 +10,7 @@ One section per phase, added as each phase is finished.
 | Encapsulation | `_underscore` attributes + `@property` everywhere; e.g. `User.name` setter, `LibraryItem.total_copies` setter, read-only `Member.loans` (returns a copy) |
 | Abstraction | `User`, `Member`, `LibraryItem`, `FinePolicy` are ABCs with `@abstractmethod` |
 | Inheritance | `User → Member → Student/Faculty`, `User → Librarian`, `LibraryItem → Book → ReferenceBook`, `FinePolicy → StudentFinePolicy/FacultyFinePolicy` |
-| Polymorphism | `item.can_be_borrowed_by(member)`, `member.get_fine_policy()`, `member.has_research_access()`, `user.can_manage_library()`, `item.get_loan_limit_days()` |
+| Polymorphism | `item.can_be_borrowed_by(member)`, `member.get_fine_policy()`, `member.has_research_access()`, `user.can_manage_library()`, `item.get_loan_limit_days()`, `user.to_dict()` (Member adds its own fields), `exc.http_status` in the Flask error handler |
 | Operator overloading | `LibraryItem.__eq__`, `__hash__`, `__lt__`, `__str__`; `Reservation.__lt__` |
 | Custom exceptions | `exceptions.py`: `LibraryException` and its subclasses |
 | Singleton | `Library` (`services/library.py`) |
@@ -189,8 +189,8 @@ One section per phase, added as each phase is finished.
 - New exceptions: `OverdueLoans` and `NotFound`, both subclasses of `LibraryException`.
 - Notifications are kept in a list on `Member` and saved to the database (Phase 5).
 
-### Added after Phase 4: `remove_item()` and `cancel_reservation()`
-- **`remove_item(actor, item_id)`:** Librarians only, and refused while any copy is on loan. Anyone waiting for the item gets a message and their reservation is cancelled. The item's past loans are also removed from members' history, so the database never has a loan pointing at an item that no longer exists.
+### Added after Phase 4: `withdraw_item()` and `cancel_reservation()`
+- **`withdraw_item(actor, item_id)`:** A **soft delete**. Librarians only, and refused while any copy is on loan. The item isn't deleted: `item.withdraw()` sets a `withdrawn` flag, which hides it from `search()` and `all_items()` and blocks issuing and reserving it. Members' loan history still points to it. Anyone waiting for the item gets a message and their reservation is cancelled. (This first deleted the item and its history as `remove_item()`, and was changed to a soft delete before Phase 6 so history is kept.)
 - **`cancel_reservation(actor, member_id, item_id)`:** A member can cancel their own reservation, and a librarian can cancel anyone's. If a returned copy was being held for that member, it passes to the next person in line, and they're notified.
 - **`_notify_held_copies(item)`:** One helper used by both `return_item()` and `cancel_reservation()`. If there are N free copies, the first N people in line should each have been told. Anyone in that group whose reservation isn't `notified` yet gets a message.
 
@@ -237,3 +237,66 @@ One section per phase, added as each phase is finished.
 - **Saves are full snapshots.** `save_to()` rewrites every table. That's simple and safe for a library of this size, and Phase 6 can call it after each change.
 - **`loan_id` is the first argument of `Loan(...)`, and `Library` assigns it.** That way the id exists before the loan is saved.
 - **`Reservation.notified` is stored**, so after a restart nobody is told twice and nobody is skipped.
+
+---
+
+## Phase 6: Flask routes
+
+**Files:** `app.py`; changes to `exceptions.py`, `services/library.py`, `models/users.py`, `models/loan.py`, `models/reservation.py`, `models/items.py` (withdrawn flag), `storage/` (withdrawn column)
+
+### `create_app()` (`app.py`)
+- **What it does:** Builds the Flask app. It reads `FLASK_SECRET_KEY` and the DB path from `.env`, and stops with a clear message if the key is missing. It then loads the `Library` from the database and defines the routes. Tests call `create_app(db_path=..., secret_key=...)` with a temporary database.
+- **Why a function:** Flask calls this an "app factory". Each test can build a fresh app on its own database.
+
+### Routes stay thin
+- **What each route does:**
+  1. Reads the request.
+  2. Gets the logged-in user with `current_user()`.
+  3. Calls **one** `Library` method, passing the user along.
+  4. Saves.
+  5. Returns JSON.
+- **What routes never contain:** a permission check, a limit, a fine or an availability rule. Those all stay in `Library` and the models. A test (`test_routes_contain_no_rules`) fails if `app.py` mentions `can_manage_library`, `can_be_borrowed_by`, `check_can_borrow`, `Student`, `Librarian` and similar names.
+- **`member_id` is optional:** a member acts for themself, and a librarian names the member. `Library._require_self_or_librarian()` decides whether that's allowed, not the route.
+- **`change(action)`:** a helper that runs the library change and then saves to the database, under a lock so two requests can't save at the same time. `action` is a `lambda`, a small unnamed function, so `change()` can run the code it's given and then save.
+
+### Login (Flask sessions)
+- **What it does:** `POST /api/login` calls `library.authenticate()`, which checks the password hash. The user id is stored in `session`, a cookie signed with the secret key so the browser can't change it. The cookie is `HttpOnly` (JavaScript can't read it) and `SameSite=Lax` (basic protection against CSRF).
+- **Bad login message:** a wrong login says "Wrong user id or password." and never reveals which part was wrong.
+- **Not logged in:** any route called without a login answers with 401 `NotAuthenticated`.
+
+### One error handler, clean JSON
+- **What it does:** Every error comes back as `{"error": {"type": ..., "message": ...}}` with a status code, never a stack trace.
+  - `LibraryException`: each exception class carries its own `http_status`: 400 by default, 401 `NotAuthenticated`, 403 `PermissionDenied`, 404 `NotFound`, 409 for state conflicts (`ItemNotAvailable`, `LimitExceeded`, `UnpaidFines`, `OverdueLoans`). The handler is one line: `e.http_status`.
+  - `ValueError`: 400 `InvalidInput`, e.g. a bad year or a missing field.
+  - Flask's own errors, such as an unknown URL (404) or a wrong method (405), also come back as the same JSON.
+  - Anything unexpected: 500 with a polite message. The details go to the server log only.
+- **OOP concept:** Polymorphism. The handler doesn't need a table of status codes; it asks the exception object.
+
+### Endpoints
+| Method | URL | Calls |
+|---|---|---|
+| POST | `/api/login`, `/api/logout` | `library.authenticate()` |
+| GET | `/api/me` | `user.to_dict()` |
+| GET | `/api/items?q=` | `library.catalog()` (search + status + actions) |
+| GET | `/api/items/<id>` | `library.item_details()` |
+| POST | `/api/loans` | `library.issue()` |
+| POST | `/api/loans/return` | `library.return_item()` |
+| POST | `/api/reservations` | `library.reserve()` |
+| DELETE | `/api/reservations/<item_id>` | `library.cancel_reservation()` |
+| GET | `/api/me/loans`, `/api/me/reservations`, `/api/me/notifications` | `library.get_member()`, `library.reservations_for()` |
+| POST | `/api/fines/pay` | `library.pay_fine()` |
+| POST | `/api/items` | `library.create_item()` (uses `ItemFactory`) |
+| POST | `/api/items/<id>/withdraw` | `library.withdraw_item()` |
+| GET | `/api/reports/overdue`, `/api/reports/stats` | `library.overdue_loans()`, `library.stats()` |
+
+### How objects become JSON
+- **What it does:** Each model describes itself with `to_dict()`: `User`, `Member`, `Loan`, `Reservation`, `LibraryItem`. `Member.to_dict()` calls `super().to_dict()` and adds the fine balance, borrow limit and so on.
+- **What `Library` adds:** facts only it knows, through `describe_item()` and `reservations_for()`: the status text, the waitlist position, and **what the viewer may do** (`actions.can_borrow`, `actions.can_reserve`, `actions.reason`).
+- **How `actions` is worked out:** by the same `_check_can_issue()` and `_check_can_reserve()` methods that `issue()` and `reserve()` use. The frontend just shows or hides buttons from these values, so JavaScript never decides a rule.
+- **What's never sent:** the password hash. `User.to_dict()` leaves it out.
+
+### Decisions
+- **`remove_item()` became `withdraw_item()`, a soft delete** (see Phase 4). The flag is a new `withdrawn` column. Older database files get the column added automatically when they're opened (`ADDED_COLUMNS` in `storage/database.py`).
+- **Every change saves the whole library** (`save_to()`) before the response is sent. That's simple and safe at this size.
+- **`POST /api/fines/pay` was added** although it wasn't in the endpoint list, because the UI needs fine-payment feedback. A member can pay their own fine, and a librarian can record a payment for anyone.
+- **Not built yet:** creating member accounts and changing fine rules from the API (librarian screens); serving the frontend pages (Phase 7).

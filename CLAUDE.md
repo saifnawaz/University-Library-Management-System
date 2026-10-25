@@ -142,7 +142,7 @@ Warm paper look, serif headings, book-spine colour blocks. Match the mockups in 
 - The author is new to Python (comes from C/C++). After writing each class, explain briefly in simple language what it does and which OOP concept it shows. These explanations matter for the viva.
 - Work one phase at a time. Do not jump ahead or build multiple phases in one go.
 - Keep code readable over clever.
-- Smoke tests live in `tests/smoke_test.py` (run `python -m tests.smoke_test` from the project root). Extend it with tests for each new phase.
+- Smoke tests live in `tests/smoke_test.py`. Run them from the project root with the venv's Python: `.venv\Scripts\python -m tests.smoke_test`. Extend it with tests for each new phase.
 - Viva notes live in `docs/PROJECT_NOTES.md`. After finishing every phase, append a section for it: the classes, what each does, the OOP concept it shows, and the decisions made. Update the "Quick map" table when a phase adds a new concept or pattern, and fix earlier sections if later work changes them.
 
 ## Phases

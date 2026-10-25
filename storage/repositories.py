@@ -89,7 +89,7 @@ class ItemRepository(Repository[LibraryItem]):
 
     TABLE = "items"
     COLUMNS = ("item_id", "type", "title", "author", "year", "subject", "description",
-               "total_copies", "available_copies", "extra")
+               "total_copies", "available_copies", "withdrawn", "extra")
     KEY_COLUMNS = ("item_id",)
     ORDER_BY = "item_id"
 

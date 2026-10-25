@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import date
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     # Only for type hints; avoids a circular import with models.users.
@@ -98,6 +98,24 @@ class Loan:
         """Fine for this loan. The member's fine policy decides the amount."""
         policy = self._member.get_fine_policy()
         return policy.calculate_fine(self.days_overdue(today))
+
+    def to_dict(self, today: date | None = None) -> dict[str, Any]:
+        """Loan data for the web API, including how late it is and the fine so far."""
+        return {
+            "loan_id": self._loan_id,
+            "member_id": self._member.user_id,
+            "member_name": self._member.name,
+            "item_id": self._item.item_id,
+            "item_title": self._item.title,
+            "item_type": self._item.get_item_type(),
+            "issue_date": self._issue_date.isoformat(),
+            "due_date": self._due_date.isoformat(),
+            "return_date": self._return_date.isoformat() if self._return_date else None,
+            "returned": self.is_returned(),
+            "overdue": self.is_overdue(today),
+            "days_overdue": self.days_overdue(today),
+            "fine": self.calculate_fine(today),
+        }
 
     def __repr__(self) -> str:
         return (f"Loan(id={self._loan_id}, member={self._member.user_id!r}, "

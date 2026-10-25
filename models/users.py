@@ -7,7 +7,7 @@ import hmac
 import os
 from abc import ABC, abstractmethod
 from datetime import date
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from exceptions import LibraryException, LimitExceeded, OverdueLoans, UnpaidFines
 from services.fine_policy import FacultyFinePolicy, FinePolicy, StudentFinePolicy
@@ -90,6 +90,15 @@ class User(ABC):
     def can_manage_library(self) -> bool:
         """Return True if this user may add items, issue/return and manage members."""
         return False
+
+    def to_dict(self) -> dict[str, Any]:
+        """Public account data for the web API. Never includes the password hash."""
+        return {
+            "user_id": self._user_id,
+            "name": self._name,
+            "role": self.get_role(),
+            "can_manage_library": self.can_manage_library(),
+        }
 
     def __repr__(self) -> str:
         return f"{self.get_role()}(id={self._user_id!r}, name={self._name!r})"
@@ -182,6 +191,20 @@ class Member(User):
         """Return True if this member currently has this item on loan."""
         return any(loan.item.item_id == item_id for loan in self._loans)
 
+    def to_dict(self) -> dict[str, Any]:
+        """Account data plus the member's borrowing rules and current state."""
+        data = super().to_dict()
+        data.update(
+            fines=self._fines,
+            borrow_limit=self.get_borrow_limit(),
+            loan_days=self.get_loan_days(),
+            active_loans=len(self._loans),
+            can_borrow=self.can_borrow(),
+            fine_policy=self.get_fine_policy().describe(),
+            has_research_access=self.has_research_access(),
+        )
+        return data
+
     # ---- notifications (Observer side) ----
 
     def receive_notification(self, message: str) -> None:
@@ -200,11 +223,6 @@ class Member(User):
         """Move a loan from the active list to the history."""
         self._loans.remove(loan)
         self._history.append(loan)
-
-    def remove_history_for(self, item_id: str) -> None:
-        """Forget past loans of an item that has been removed from the catalog."""
-        self._history = [loan for loan in self._history if loan.item.item_id != item_id]
-
     def add_fine(self, amount: float) -> None:
         """Add an amount to the unpaid fine balance."""
         if amount < 0:
