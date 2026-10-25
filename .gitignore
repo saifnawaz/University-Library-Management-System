@@ -1,0 +1,21 @@
+# Secrets
+.env
+
+# SQLite database
+*.db
+*.sqlite
+*.sqlite3
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+.claude/settings.local.json
