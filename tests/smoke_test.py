@@ -1286,7 +1286,7 @@ def test_rate_limiter_window() -> None:
 # ---------- Phase 9: ChatAssistant, TopicGuard, LLM clients ----------
 
 from exceptions import LLMError, RateLimited
-from services.chat_assistant import ChatAssistant, build_assistant
+from services.chat_assistant import ChatAssistant
 from services.llm_client import GeminiClient, LLMClient
 from services.rate_limiter import RateLimiter
 from services.topic_guard import KeywordTopicGuard, LLMTopicGuard, TopicGuard
@@ -1322,7 +1322,7 @@ def test_llm_topic_guard_asks_only_when_keywords_miss() -> None:
 def test_chat_refuses_off_topic_before_the_main_call() -> None:
     lib, staff, s, f = _library()
     fake = FakeLLMClient("OTHER")
-    assistant = build_assistant(lib, fake)
+    assistant = ChatAssistant.build(lib, fake)
     for q in ("What's the weather today?", "What's my GPA?"):
         reply = assistant.ask(s, q)
         assert reply.kind == "refused" and reply.answer == ChatAssistant.REFUSAL
@@ -1335,7 +1335,7 @@ def test_chat_context_is_only_this_members_data() -> None:
     lib = seed.build_library()
     fake = _guard_aware_fake()
     me = lib.get_user("stu02")
-    reply = build_assistant(lib, fake).ask(me, "Is Database System Concepts available?")
+    reply = ChatAssistant.build(lib, fake).ask(me, "Is Database System Concepts available?")
     assert reply == type(reply)("Here is what the catalog shows.", "answer")
     system, message = fake.calls[-1]
     assert "Never invent" in system and "Bilal" not in system  # data goes in the message only
@@ -1355,17 +1355,17 @@ def test_chat_context_is_only_this_members_data() -> None:
 def test_chat_context_says_when_nothing_matches() -> None:
     lib, staff, s, f = _library()
     fake = _guard_aware_fake()
-    build_assistant(lib, fake).ask(s, "Do you have Harry Potter?")
+    ChatAssistant.build(lib, fake).ask(s, "Do you have Harry Potter?")
     assert "No catalog items matched the question." in fake.calls[-1][1]
 
 
 def test_chat_falls_back_when_llm_fails_or_is_missing() -> None:
     lib, staff, s, f = _library()
-    broken = build_assistant(lib, FakeLLMClient(fail=True))
+    broken = ChatAssistant.build(lib, FakeLLMClient(fail=True))
     for q in ("Is Clean Code available?", "Got anything by Tolkien?"):  # main call / guard call fails
         reply = broken.ask(s, q)
         assert reply.kind == "unavailable" and reply.answer == ChatAssistant.FALLBACK
-    no_key = build_assistant(lib, None)
+    no_key = ChatAssistant.build(lib, None)
     assert no_key.ask(s, "Is Clean Code available?").kind == "unavailable"
     assert no_key.ask(s, "What's my GPA?").kind == "refused"  # keyword guard still works
 
@@ -1390,7 +1390,7 @@ def test_chat_checks_input_permission_and_rate() -> None:
 def test_chat_answer_is_plain_text() -> None:
     lib, staff, s, f = _library()
     fake = FakeLLMClient("**Clean Code** is on the shelf.")
-    assert build_assistant(lib, fake).ask(s, "Is Clean Code in?").answer == "Clean Code is on the shelf."
+    assert ChatAssistant.build(lib, fake).ask(s, "Is Clean Code in?").answer == "Clean Code is on the shelf."
 
 
 def test_gemini_client_wraps_every_failure() -> None:
@@ -1453,7 +1453,9 @@ def test_gemini_client_retries_backup_model_once() -> None:
     client._client = Script({main: ApiError(504), backup: ApiError(503)})
     _expect(LLMError, client.generate, "system", "hi")               # both busy: no third try
     assert client._client.asked == [main, backup]
-    for code in (400, 403, 429):                                     # bad key/quota: no retry
+    client._client = Script({main: ApiError(429), backup: "Backup has its own quota."})
+    assert client.generate("system", "hi") == "Backup has its own quota."  # quota is per model
+    for code in (400, 403):                                          # bad request/key: no retry
         client._client = Script({main: ApiError(code), backup: "unused"})
         _expect(LLMError, client.generate, "system", "hi")
         assert client._client.asked == [main]
@@ -1475,6 +1477,109 @@ def test_route_chat() -> None:
         assert r.status_code == 429 and _error(r)["type"] == "RateLimited"
         _login(c, "L1")
         assert c.post("/api/chat", json={"question": "Any fines?"}).status_code == 403
+
+
+# ---------- StaffAssistant (Phase 9, part 2) ----------
+
+from services.staff_assistant import StaffAssistant
+
+
+def test_staff_assistant_is_a_chat_assistant_for_librarians_only() -> None:
+    lib, staff, s, f = _library()
+    assistant = StaffAssistant.build(lib, _guard_aware_fake("Two loans are overdue."))
+    assert isinstance(assistant, ChatAssistant)
+    for member in (s, f):
+        e = _expect(PermissionDenied, assistant.ask, member, "Who is overdue?")
+        assert "librarians only" in e.message
+    assert assistant.ask(staff, "Who is overdue?") == type(assistant.ask(staff, "Hi"))(
+        "Two loans are overdue.", "answer")
+    # The member assistant still refuses librarians: each class decides who may ask
+    _expect(PermissionDenied, ChatAssistant.build(lib, FakeLLMClient()).ask, staff, "Any fines?")
+
+
+def test_staff_topic_guard_knows_staff_words() -> None:
+    lib, staff, s, f = _library()
+    def ask(q: str) -> Any:  # keyword guard only; a new assistant each time (rate limit)
+        return StaffAssistant.build(lib, None).ask(staff, q)
+
+    for q in ("Who is more than 7 days overdue?", "How many theses are on loan?",
+              "Which books have a waitlist?", "How many students do we have?",
+              "Show me this month's stats", "What was issued most?"):
+        assert ask(q).kind == "unavailable", q  # on topic (no LLM, so the fallback)
+    for q in ("What's the weather today?", "What is Ali's GPA?"):
+        reply = ask(q)
+        assert reply.kind == "refused" and reply.answer == StaffAssistant.REFUSAL, q
+    assert StaffAssistant.REFUSAL != ChatAssistant.REFUSAL
+    assert StaffAssistant.FALLBACK != ChatAssistant.FALLBACK
+    # The LLM classifier is told about staff topics, not a member's account
+    fake = FakeLLMClient("OTHER")
+    StaffAssistant.build(lib, fake).ask(staff, "Who won the match?")
+    assert "running the library" in fake.calls[0][0]
+
+
+def test_staff_context_has_library_wide_data_but_no_secrets() -> None:
+    import seed
+    lib = seed.build_library()
+    fake = _guard_aware_fake()
+    librarian = lib.get_user("lib01")
+    StaffAssistant.build(lib, fake).ask(librarian, "Who is more than 7 days overdue?")
+    system, message = fake.calls[-1]
+    assert "staff assistant" in system and "Never invent" in system
+    assert "Bilal" not in system                               # data only in the message
+    assert "LIBRARIAN'S QUESTION" in message and "MEMBER'S QUESTION" not in message
+    # Overdue: Bilal's algorithms book (11 days) and Dr. Malik's magazine (5 days)
+    assert ('Bilal Ahmed (stu02, Student): "Introduction to Algorithms" (Book, B002)' in message
+            and "11 days overdue" in message and "5 days overdue" in message)
+    assert "Thesis: 1" in message                              # loans by item type
+    assert "MEMBERS WITH FINES" in message and "current fine Rs 30" in message
+    assert '"Introduction to Algorithms" (Book, B002): 1 waiting: 1. Ayesha Khan (stu01' in message
+    assert "Most borrowed, all time:" in message
+    for user_id, name, _, _ in seed.ACCOUNTS:                  # every account listed by name...
+        user = lib.get_user(user_id)
+        assert name in message
+        assert user.password_hash not in message and user.password_hash not in system  # ...never a hash
+    assert "pbkdf2" not in message.lower()
+
+
+def test_staff_context_looks_up_named_members() -> None:
+    import seed
+    lib = seed.build_library()
+    fake = _guard_aware_fake()
+    assistant = StaffAssistant.build(lib, fake)
+    librarian = lib.get_user("lib01")
+    assistant.ask(librarian, "What does Ayesha have on loan?")
+    message = fake.calls[-1][1]
+    assert "MEMBERS NAMED IN THE QUESTION" in message
+    assert 'on loan: "Clean Code"' in message and 'waiting for: "Introduction to Algorithms"' in message
+    assistant.ask(librarian, "Is fac01 allowed to borrow?")    # by member id
+    assert "Dr. Imran Malik (fac01, Faculty): can borrow up to 10" in fake.calls[-1][1]
+    assistant.ask(librarian, "How many items are on loan?")    # nobody named: no details section
+    assert "MEMBERS NAMED IN THE QUESTION" not in fake.calls[-1][1]
+
+
+def test_staff_assistant_falls_back_and_is_rate_limited() -> None:
+    lib, staff, s, f = _library()
+    broken = StaffAssistant.build(lib, FakeLLMClient(fail=True))
+    reply = broken.ask(staff, "Which books have a waitlist?")
+    assert reply.kind == "unavailable" and reply.answer == StaffAssistant.FALLBACK
+    now = [0.0]
+    limited = StaffAssistant(lib, FakeLLMClient(), KeywordTopicGuard(),
+                             RateLimiter(1, 60, clock=lambda: now[0]))
+    limited.ask(staff, "Any overdue loans?")
+    _expect(RateLimited, limited.ask, staff, "Any overdue loans?")
+
+
+def test_route_staff_chat() -> None:
+    with _client() as c:
+        assert c.post("/api/staff/chat", json={"question": "Who is overdue?"}).status_code == 401
+        _login(c, "S1")
+        assert c.post("/api/staff/chat", json={"question": "Who is overdue?"}).status_code == 403
+        _login(c, "L1")
+        r = c.post("/api/staff/chat", json={"question": "Which books have a waitlist?"})
+        assert r.status_code == 200
+        assert r.get_json() == {"answer": "Fake answer from the test LLM.", "kind": "answer"}
+        r = c.post("/api/staff/chat", json={"question": "What's the weather today?"})
+        assert r.get_json() == {"answer": StaffAssistant.REFUSAL, "kind": "refused"}
 
 
 # ---------- runner ----------

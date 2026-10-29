@@ -29,7 +29,8 @@ class GeminiClient(LLMClient):
 
     # 3.5 Flash answers in a few seconds; 3.7/3.8 Flash often ran past the deadline (504).
     DEFAULT_MODEL: str = "gemini-3.5-flash"
-    BACKUP_MODEL: str = "gemini-3.5-flash-lite"   # tried once if Google is overloaded (5xx)
+    # Tried once if the main model is overloaded (5xx) or out of quota (429): quotas are per model.
+    BACKUP_MODEL: str = "gemini-3.5-flash-lite"
     TIMEOUT_SECONDS: int = 20
     TEMPERATURE: float = 0.2      # low: stick to the facts we pass in
     MAX_OUTPUT_TOKENS: int = 2048
@@ -64,9 +65,9 @@ class GeminiClient(LLMClient):
         try:
             text = self._ask(self._model, system_prompt, message)
         except Exception as e:
-            if not self._is_server_error(e) or self._model == self.BACKUP_MODEL:
+            if not self._worth_retrying(e) or self._model == self.BACKUP_MODEL:
                 raise self._failed(e) from e
-            log.warning("Gemini %s busy (%s), trying %s", self._model, getattr(e, "code", ""),
+            log.warning("Gemini %s unavailable (%s), trying %s", self._model, getattr(e, "code", ""),
                         self.BACKUP_MODEL)
             try:
                 text = self._ask(self.BACKUP_MODEL, system_prompt, message)
@@ -90,11 +91,12 @@ class GeminiClient(LLMClient):
         return (response.text or "").strip()
 
     @staticmethod
-    def _is_server_error(e: Exception) -> bool:
-        """True for Google-side trouble (503 overloaded, 504 deadline) worth one retry.
-        Bad key, quota (429) or a bad request would fail again, so they are not retried."""
+    def _worth_retrying(e: Exception) -> bool:
+        """True if another model might answer: Google-side trouble (503 overloaded, 504
+        deadline) or this model's quota used up (429; the backup has its own quota).
+        A bad key or bad request (other 4xx) would fail again, so it is not retried."""
         code = getattr(e, "code", None)
-        return isinstance(code, int) and code >= 500
+        return isinstance(code, int) and (code == 429 or code >= 500)
 
     @staticmethod
     def _failed(e: Exception) -> LLMError:

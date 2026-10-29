@@ -19,7 +19,8 @@ from werkzeug.exceptions import HTTPException
 
 from exceptions import LibraryException, NotAuthenticated, NotFound
 from models.users import User
-from services.chat_assistant import build_assistant
+from services.chat_assistant import ChatAssistant
+from services.staff_assistant import StaffAssistant
 from services.demo import DemoMode
 from services.library import Library
 from services.llm_client import GeminiClient, LLMClient
@@ -61,7 +62,8 @@ def create_app(db_path: str | None = None, secret_key: str | None = None,
     if llm is None:
         app.logger.warning("GEMINI_API_KEY is not set: the chat assistant will answer "
                            "with its 'not available' message.")
-    assistant = build_assistant(library, llm)
+    assistant = ChatAssistant.build(library, llm)
+    staff_assistant = StaffAssistant.build(library, llm)
 
     # ---- helpers (request reading and saving only, no library rules) ----
 
@@ -260,6 +262,11 @@ def create_app(db_path: str | None = None, secret_key: str | None = None,
     def chat() -> Response:
         question = str(body().get("question") or "")
         return jsonify(assistant.ask(current_user(), question).to_dict())
+
+    @app.post("/api/staff/chat")
+    def staff_chat() -> Response:
+        question = str(body().get("question") or "")
+        return jsonify(staff_assistant.ask(current_user(), question).to_dict())
 
     @app.get("/api/me/notifications")
     def my_notifications() -> Response:

@@ -1,11 +1,12 @@
 // Librarian overview: today's numbers, quick issue/return, overdue loans, most borrowed,
-// and a spot for the staff assistant (switched off until Phase 9).
+// and the staff assistant.
 
 import { api, ApiError } from "./api.js";
+import { staffChatPanel } from "./assistant.js";
 import { overdueTable, shelfChart } from "./staff-common.js";
 import {
   h, boot, startPage, stat, busy, toast, toastError, formatDate, formatMoney, todayLong,
-  assistantPanel, loadingState, errorState,
+  loadingState, errorState,
 } from "./ui.js";
 
 const main = document.getElementById("main");
@@ -64,6 +65,7 @@ function quickDesk(onChange) {
 }
 
 let deskPanel = null; // kept between refreshes so typed IDs are not lost
+let askPanel = null;  // kept too, so the conversation survives an issue or return
 
 async function load() {
   try {
@@ -72,6 +74,7 @@ async function load() {
       api.get("/api/reports/overdue"),
     ]);
     deskPanel = deskPanel || quickDesk(load);
+    askPanel = askPanel || staffChatPanel();
     main.replaceChildren(
       h("div", { class: "page-head" },
         h("div", {}, h("p", { class: "eyebrow" }, todayLong()), h("h1", {}, "Today at the desk"))),
@@ -89,11 +92,7 @@ async function load() {
       h("section", { class: "section" },
         h("h2", {}, `Most borrowed, last ${stats.recent_days} days`),
         shelfChart(stats.most_borrowed_recent.slice(0, 4))),
-      assistantPanel({
-        title: "Staff assistant",
-        placeholder: "Which members have overdue theses?",
-        comingSoon: "ask about overdue loans, member accounts, waitlists and borrowing trends.",
-      }));
+      askPanel);
   } catch (error) {
     main.replaceChildren(errorState(error, load));
   }
