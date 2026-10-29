@@ -112,6 +112,16 @@ def build_library() -> Library:
     """Create the demo library in memory, using only normal Library methods."""
     Library.reset()
     lib = Library()
+    populate(lib)
+    return lib
+
+
+def populate(lib: Library) -> None:
+    """Fill an empty library with the demo accounts, items, loans and waitlist.
+
+    Kept separate from build_library() so the demo reset can refill the library
+    the running app already uses (the Singleton) instead of making a new one.
+    """
     for user_id, name, password, cls in ACCOUNTS:
         lib.add_user(cls(user_id, name, User.hash_password(password)))
     staff = lib.get_user("lib01")
@@ -143,7 +153,6 @@ def build_library() -> Library:
 
     # Waitlist: both copies of B002 are out, so Ayesha joins the line.
     lib.reserve(staff, "stu01", "B002")
-    return lib
 
 
 def main() -> None:

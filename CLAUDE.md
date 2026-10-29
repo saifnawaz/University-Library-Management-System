@@ -16,7 +16,7 @@ ALL library business logic lives in Python classes inside `models/` and `service
 - Python 3.11+, Flask
 - SQLite via the built-in `sqlite3` module, wrapped by `Repository`
 - scikit-learn (TF-IDF + cosine similarity) for content-based recommendations
-- An LLM API for the chatbot; key read from `.env` (never hardcoded, never committed)
+- Google Gemini for the chatbot, through Google's official SDK (`google-genai`); key in `GEMINI_API_KEY` in `.env` (never hardcoded, never committed). Tests use `FakeLLMClient` and never call the internet.
 - Frontend: plain HTML, CSS, JS using `fetch()`
 
 ## Folder structure
@@ -24,7 +24,8 @@ ALL library business logic lives in Python classes inside `models/` and `service
 ```
 models/        # User hierarchy, LibraryItem hierarchy, Loan, Reservation
 services/      # Library, FinePolicy, ItemFactory, NotificationCenter,
-               # Recommender + strategies, ChatAssistant, TopicGuard
+               # Recommender + strategies, ChatAssistant, TopicGuard,
+               # LLMClient (Gemini/Fake), RateLimiter, DemoMode
 storage/       # Repository, database setup
 exceptions.py
 app.py         # Flask routes only
@@ -72,6 +73,9 @@ Loan due date = the shorter of the member's loan period and the item's limit; th
 - **ChatAssistant**: private `_system_prompt`, a TopicGuard, an LLM client; ask(member, question), private `_build_context()` that pulls real data from Library and Recommender
 - **StaffAssistant** (subclass of ChatAssistant): the librarian's assistant; overrides the system prompt and `_build_context()` with staff data (overdue loans, members, waitlists, reports). Its panel already sits, switched off, at the bottom of the staff overview.
 - **TopicGuard** (abstract): LLMTopicGuard, KeywordTopicGuard
+- **LLMClient** (abstract): GeminiClient (real), FakeLLMClient (tests); raises `LLMError`, which ChatAssistant turns into a fallback message
+- **RateLimiter**: N actions per key per time window; used for chat questions and the demo reset
+- **DemoMode**: only created when `DEMO_MODE` is on; demo logins for the sign-in page and a reset that reruns `seed.populate()`
 
 ## Error handling (Phase 6)
 
@@ -143,7 +147,7 @@ Warm paper look, serif headings, book-spine colour blocks. Match the mockups in 
 
 From the project root, with the venv's Python:
 
-- Copy `.env.example` to `.env` and set `FLASK_SECRET_KEY`. `PORT` is optional (default 8765; port 5000 is blocked on the author's machine).
+- Copy `.env.example` to `.env` and set `FLASK_SECRET_KEY`. Optional: `GEMINI_API_KEY` (chat assistant; without it the assistant answers with a fallback), `PORT` (default 8765; port 5000 is blocked on the author's machine), `DEMO_MODE=1` for the public demo.
 - `.venv\Scripts\python seed.py` loads demo data (`--reset` replaces existing data).
 - `.venv\Scripts\python app.py` starts the app at http://127.0.0.1:8765 (or the `PORT` from `.env`).
 

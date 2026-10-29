@@ -57,6 +57,13 @@ class Library:
         self._notifications: NotificationCenter = NotificationCenter()
         self._next_loan_id: int = 1
 
+    def clear(self) -> None:
+        """Remove every item, user, loan and reservation from memory (used by the demo reset).
+
+        Nothing is saved until the caller saves; the same Library object stays in use.
+        """
+        self._clear()
+
     @classmethod
     def reset(cls) -> None:
         """Forget the current instance so the next Library() starts empty. For tests."""

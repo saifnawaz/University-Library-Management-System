@@ -19,18 +19,30 @@ from werkzeug.exceptions import HTTPException
 
 from exceptions import LibraryException, NotAuthenticated, NotFound
 from models.users import User
+from services.chat_assistant import build_assistant
+from services.demo import DemoMode
 from services.library import Library
+from services.llm_client import GeminiClient, LLMClient
 from storage.database import PROJECT_ROOT, Database
 
 T = TypeVar("T")
 
 
-def create_app(db_path: str | None = None, secret_key: str | None = None) -> Flask:
+def env_flag(name: str) -> bool:
+    """True if the environment variable is set to 1, true, yes or on (any case)."""
+    return os.getenv(name, "").strip().lower() in ("1", "true", "yes", "on")
+
+
+def create_app(db_path: str | None = None, secret_key: str | None = None,
+               demo_mode: bool | None = None, llm: LLMClient | None = None) -> Flask:
     """Build the Flask app and load the library from the database.
 
-    db_path and secret_key default to the values in .env; tests pass their own.
+    db_path, secret_key, demo_mode and the LLM client default to the values in .env;
+    tests pass their own (always a FakeLLMClient, so tests never call the internet).
     """
     load_dotenv(PROJECT_ROOT / ".env")
+    if demo_mode is None:
+        demo_mode = env_flag("DEMO_MODE")
     app = Flask(__name__, static_folder="static", static_url_path="/static")
     app.config["SECRET_KEY"] = secret_key or os.getenv("FLASK_SECRET_KEY")
     if not app.config["SECRET_KEY"]:
@@ -44,6 +56,12 @@ def create_app(db_path: str | None = None, secret_key: str | None = None) -> Fla
     library.load_from(db)
     db.close()
     write_lock = threading.Lock()  # one change + save at a time
+
+    llm = llm or GeminiClient.from_env()
+    if llm is None:
+        app.logger.warning("GEMINI_API_KEY is not set: the chat assistant will answer "
+                           "with its 'not available' message.")
+    assistant = build_assistant(library, llm)
 
     # ---- helpers (request reading and saving only, no library rules) ----
 
@@ -143,6 +161,22 @@ def create_app(db_path: str | None = None, secret_key: str | None = None) -> Fla
         session["user_id"] = user.user_id
         return jsonify(user.to_dict())
 
+    # ---- demo mode: these routes only exist when DEMO_MODE is on ----
+
+    if demo_mode:
+        import seed  # demo data lives in seed.py
+        demo = DemoMode(library, seed.ACCOUNTS, seed.populate)
+
+        @app.get("/api/demo/accounts")
+        def demo_accounts() -> Response:
+            return jsonify(demo.accounts())
+
+        @app.post("/api/demo/reset")
+        def demo_reset() -> Response:
+            change(demo.reset)
+            session.clear()  # whoever was signed in starts again from the login page
+            return jsonify(ok=True)
+
     @app.post("/api/logout")
     def logout() -> Response:
         session.clear()
@@ -221,6 +255,11 @@ def create_app(db_path: str | None = None, secret_key: str | None = None) -> Fla
     def my_recommendations() -> Response:
         user = current_user()
         return jsonify(library.recommendations_for(user, user.user_id))
+
+    @app.post("/api/chat")
+    def chat() -> Response:
+        question = str(body().get("question") or "")
+        return jsonify(assistant.ask(current_user(), question).to_dict())
 
     @app.get("/api/me/notifications")
     def my_notifications() -> Response:

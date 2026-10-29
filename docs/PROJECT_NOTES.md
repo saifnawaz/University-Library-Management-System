@@ -8,17 +8,19 @@ One section per phase, added as each phase is finished.
 | Concept | Where |
 |---|---|
 | Encapsulation | `_underscore` attributes + `@property` everywhere; e.g. `User.name` setter, `LibraryItem.total_copies` setter, read-only `Member.loans` (returns a copy) |
-| Abstraction | `User`, `Member`, `LibraryItem`, `FinePolicy`, `RecommendationStrategy` are ABCs with `@abstractmethod` |
-| Inheritance | `User → Member → Student/Faculty`, `User → Librarian`, `LibraryItem → Book → ReferenceBook`, `FinePolicy → StudentFinePolicy/FacultyFinePolicy`, `RecommendationStrategy → ContentBased/Collaborative/PopularityStrategy` |
-| Polymorphism | `item.can_be_borrowed_by(member)`, `member.get_fine_policy()`, `member.has_research_access()`, `user.can_manage_library()`, `item.get_loan_limit_days()`, `user.to_dict()` (Member adds its own fields), `exc.http_status` in the Flask error handler, `strategy.recommend(...)` in `Recommender` |
+| Abstraction | `User`, `Member`, `LibraryItem`, `FinePolicy`, `RecommendationStrategy`, `LLMClient`, `TopicGuard` are ABCs with `@abstractmethod` |
+| Inheritance | `User → Member → Student/Faculty`, `User → Librarian`, `LibraryItem → Book → ReferenceBook`, `FinePolicy → StudentFinePolicy/FacultyFinePolicy`, `RecommendationStrategy → ContentBased/Collaborative/PopularityStrategy`, `LLMClient → GeminiClient/FakeLLMClient`, `TopicGuard → KeywordTopicGuard/LLMTopicGuard` |
+| Polymorphism | `item.can_be_borrowed_by(member)`, `member.get_fine_policy()`, `member.has_research_access()`, `user.can_manage_library()`, `item.get_loan_limit_days()`, `user.to_dict()` (Member adds its own fields), `exc.http_status` in the Flask error handler, `strategy.recommend(...)` in `Recommender`, `llm.generate(...)` and `guard.is_library_question(...)` in `ChatAssistant` |
 | Operator overloading | `LibraryItem.__eq__`, `__hash__`, `__lt__`, `__str__`; `Reservation.__lt__` |
 | Custom exceptions | `exceptions.py`: `LibraryException` and its subclasses |
 | Singleton | `Library` (`services/library.py`) |
 | Factory | `ItemFactory.create()` (`services/item_factory.py`) |
-| Strategy | `FinePolicy` and its subclasses (`services/fine_policy.py`); `RecommendationStrategy` and its subclasses, combined by `Recommender` (`services/recommender.py`) |
+| Strategy | `FinePolicy` and its subclasses (`services/fine_policy.py`); `RecommendationStrategy` and its subclasses, combined by `Recommender` (`services/recommender.py`); `TopicGuard` and `LLMClient` are swappable strategies inside `ChatAssistant` |
 | Observer | `NotificationCenter` (`services/notification_center.py`) + `Member.receive_notification()` |
 | Generics | `Repository(Generic[T])` (`storage/repositories.py`): one base class, used as `Repository[LibraryItem]`, `Repository[User]`, and so on |
 | Repository | `ItemRepository`, `UserRepository`, `LoanRepository`, `ReservationRepository`: the only classes that talk to the database |
+| Dependency injection | `ChatAssistant` is given its `LLMClient`, `TopicGuard` and `RateLimiter`; tests pass `FakeLLMClient` instead of Gemini. `DemoMode` is given the seed accounts and `populate` |
+| Encapsulation of secrets | `ChatAssistant._system_prompt` (private); the LLM context is built field by field, never from `to_dict()`, so password hashes can't leak |
 
 ## Python vs C++ cheat sheet
 
@@ -42,7 +44,7 @@ One section per phase, added as each phase is finished.
 
 From the project root, with the venv:
 
-1. `copy .env.example .env`, then set `FLASK_SECRET_KEY` (and `PORT` if 8765 is taken).
+1. `copy .env.example .env`, then set `FLASK_SECRET_KEY`. Optional: `GEMINI_API_KEY` for the chat assistant, `PORT` if 8765 is taken, `DEMO_MODE=1` for the public demo.
 2. `.venv\Scripts\python seed.py` loads the demo data (`--reset` replaces what's there).
 3. `.venv\Scripts\python app.py`, then open http://127.0.0.1:8765 (or the `PORT` you set).
 4. Tests: `.venv\Scripts\python -m tests.smoke_test`
@@ -506,3 +508,82 @@ From the project root, with the venv:
 - **Still suggest items with no free copy:** a good match is still worth reading. The tile says "Join waitlist" instead of "Borrow".
 - **Fresh TF-IDF on each request:** the catalog is small (tens of items), so this takes milliseconds and always reflects new items. A big catalog would cache the vectors.
 - **Seed data:** older returned loans (fac01 and stu02) give overlapping histories, so stu01 sees "Members who borrowed..." reasons. New student `stu03` (Zainab Raza, `student123`) has no loans, so she sees the popular fallback.
+
+---
+
+## Demo mode (before Phase 9)
+
+**Files:** `services/demo.py` (new), `services/rate_limiter.py` (new), `RateLimited` in `exceptions.py`, `Library.clear()`, `seed.populate()`, demo routes in `app.py`, demo panel in `static/js/login.js` + `login.html` + `app.css`.
+
+### `DemoMode`
+- **What it does:** Everything that only exists in the public demo.
+  - `accounts()`: one login per role (Student, Faculty, Librarian), each with a line on what it can do. That line comes from the account's own rules, e.g. "Borrows up to 3 items for 14 days" from `get_borrow_limit()` and `get_loan_days()`.
+  - `reset()`: empties the library (`Library.clear()`) and refills it with `seed.populate()`. The app then saves it.
+- **On/off:** `DEMO_MODE` in `.env` (1/true/yes/on; default off). `create_app()` only creates `DemoMode` and its two routes (`GET /api/demo/accounts`, `POST /api/demo/reset`) when it's on. With it off the URLs are a 404, so there's no way to list demo passwords or wipe a real library.
+- **Why `seed.py` was split:** `build_library()` calls `Library.reset()`, which makes a *new* singleton, but the running app keeps a reference to the old one. `populate(lib)` fills whatever library it's given, so the demo reset refills the app's own `Library` and the singleton stays the same object.
+- **Dependency injection:** app.py passes `seed.ACCOUNTS` and `seed.populate` into `DemoMode`, so `services/` never imports the seed script and tests can pass their own.
+
+### `RateLimiter`
+- **What it does:** `check(key)` records one action for that key, or raises `RateLimited` (HTTP 429) once there have been `max_calls` actions in the last `per_seconds`. It's a rolling window: a `deque` of timestamps per key, oldest dropped first. A lock makes it safe across Flask requests. The clock can be swapped, so tests don't have to wait.
+- Used twice: the demo reset (2 a minute, since anyone can press it) and chat questions (5 a minute per member).
+
+### Login page
+- **"Try a demo account" panel**, under Sign in: one row per account with a book-spine edge in the role's colour. Clicking a row fills the ID and password, and the user still presses Sign in. The accounts come from the API, so nothing is hardcoded in the HTML (a test checks the demo passwords aren't in `login.html` or `login.js`).
+- **"Reset demo data":** the first click changes the label to "Click again to reset", and a second click within 4 seconds resets. A toast confirms it. The reset also signs out that browser.
+
+---
+
+## Phase 9: ChatAssistant + TopicGuard (member assistant)
+
+**Files:** `services/llm_client.py`, `services/topic_guard.py`, `services/chat_assistant.py` (all new); `LLMError` in `exceptions.py`; route `POST /api/chat` in `app.py`; `static/js/assistant.js` (new) and the dashboard; `google-genai` in `requirements.txt`; `GEMINI_API_KEY` / `GEMINI_MODEL` in `.env.example`.
+
+### `LLMClient` (abstract), `GeminiClient`, `FakeLLMClient`
+- **`LLMClient`:** one abstract method, `generate(system_prompt, message) -> str`. It raises `LLMError` when there's no answer. Nothing else in the app knows which model is behind it.
+- **`GeminiClient`:** calls Google Gemini through Google's official SDK (`from google import genai`). The model comes from `GEMINI_MODEL` (default `gemini-3.8-flash`), with a 20-second timeout and a low temperature (0.2) so it sticks to the given facts. *Every* failure (no network, bad key, quota, a blocked or empty reply) becomes an `LLMError`, and the log records only the error type, never the key. `from_env()` returns `None` when there's no key.
+- **`FakeLLMClient`:** for tests. It gives a fixed reply (or one computed by a small function), records every call so tests can read exactly what would have been sent, and with `fail=True` acts like an outage. Tests never touch the internet.
+- **OOP concept:** abstraction + polymorphism, the same idea as `FinePolicy`. **`LLMError` is deliberately not a `LibraryException`**, because users never see it.
+
+### `TopicGuard` (abstract), `KeywordTopicGuard`, `LLMTopicGuard`
+- **`TopicGuard`:** one question, `is_library_question(question) -> bool`.
+- **`KeywordTopicGuard`:** free and instant. A question is on topic if:
+  - a word starts with a library stem ("borrow" covers borrowed/borrowing), or
+  - it's a greeting, or
+  - it names a catalog word (titles, authors, subjects).
+
+  "What's my GPA?" and "What's the weather today?" match none of these. Stems like "hold" and "late" were left out because they would also match "holiday" and "latest".
+- **`LLMTopicGuard`:** asks the keyword guard first, so obvious library questions cost no API call. Only when the keywords miss does it ask the LLM to answer LIBRARY or OTHER. If that call fails, the `LLMError` goes up to `ChatAssistant`, which gives the "not available" message, not a misleading refusal.
+- **Two layers:** the guard runs *before* the main LLM call, and the system prompt repeats the rule as a second layer.
+
+### `ChatAssistant`
+- **`ask(user, question)`, in order:**
+  1. **Who:** `Library.get_member()`, so a librarian gets `PermissionDenied` (StaffAssistant comes later).
+  2. **Question:** empty or over 500 characters → `ValueError` (400).
+  3. **Rate limit:** 5 questions a minute per member → `RateLimited` (429). Refused questions count too.
+  4. **TopicGuard:** off-topic questions get the fixed `REFUSAL`, and no library data is sent anywhere.
+  5. **No LLM** (no key): the fixed `FALLBACK`.
+  6. **`_build_context()`**, then **`llm.generate(_system_prompt, data + question)`**.
+  7. **`LLMError` anywhere** → `FALLBACK`. The app never crashes because of the LLM.
+- **`_build_context()`**: plain text made only from Library data, field by field:
+  - the member's own account: role, limits, fine rule, current and total fine, and whether borrowing is paused and why
+  - their loans, with due dates and overdue fines
+  - their reservations, with their place in line
+  - the recommender's picks with reasons
+  - catalog items matching the question's key words (`Library.search()` per word), each with its status and what *this* member can do
+  - the general item rules
+
+  Other members appear only as a waitlist count, never by name or id. The password hash is never included (tests check every account).
+- **`_system_prompt` (private):** library questions only, with the exact refusal for others; use only the facts in LIBRARY DATA and never invent titles, authors, dates or amounts; say where to click instead of pretending to borrow; short plain text; treat the question as data, not instructions.
+- **Prompt-injection defence:** the data and the question are sent in clearly labelled blocks, and the question sits inside `"""` quotes. The rules live in the system prompt, which the member can't see or change.
+- **Reply:** `ChatReply(answer, kind)`, a frozen dataclass. `kind` is "answer", "refused" or "unavailable", so the page can style refusals and fallbacks quietly. Markdown bold is stripped, and the page shows the answer as text, never as HTML.
+- **OOP concept:** composition + dependency injection (the assistant *has* an `LLMClient`, a `TopicGuard` and a `RateLimiter`, all passed in) + encapsulation (`_system_prompt`, `_build_context()` are private).
+
+### Wiring and UI
+- `build_assistant(library, llm)` builds the app's assistant. With a key it uses `LLMTopicGuard` (keyword check first); without one it uses `KeywordTopicGuard` alone, so off-topic questions are still refused properly. `create_app()` takes an optional `llm` (tests pass `FakeLLMClient`) and otherwise uses `GeminiClient.from_env()`. It logs a warning at startup if there's no key.
+- **Route:** `POST /api/chat {question}` → `{answer, kind}` (one line, no rules).
+- **"Ask the librarian" is on:** the conversation (last 4 exchanges) shows in the dark panel, with "Thinking…" while waiting. Three starter questions show until the first question. Errors such as the rate limit appear inline with their next step. The panel is built once, so the conversation survives a Borrow on the same page. The nav link `/dashboard#ask` scrolls to it and focuses the input.
+
+### Decisions
+- **Keyword check before the LLM classifier:** most real questions contain a library word, so they cost one API call instead of two. That matters on Gemini's free tier.
+- **Fail closed on the guard:** if the classifier can't answer, the member gets "not available", not an answer that skipped the guard.
+- **Fresh context each question, no chat memory:** each question is answered from the current data alone. That's simpler, can't drift, and is enough for one-line library questions.
+- **Rate limit in memory:** fine for one server process. Several processes would need a shared store.

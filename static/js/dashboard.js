@@ -4,8 +4,9 @@ import { api } from "./api.js";
 import { bookHandlers } from "./actions.js";
 import {
   h, boot, startPage, cover, stat, bookTile, dueText, formatMoney, todayLong,
-  blockedNotice, accruingText, assistantPanel, loadingState, emptyState, errorState,
+  blockedNotice, accruingText, loadingState, emptyState, errorState,
 } from "./ui.js";
+import { chatPanel } from "./assistant.js";
 
 const main = document.getElementById("main");
 let me = null;
@@ -88,13 +89,8 @@ function picksSection(picks) {
       : emptyState("Nothing to suggest yet", "Once members start borrowing, suggestions will show up here."));
 }
 
-function askPanel() {
-  return assistantPanel({
-    title: "Ask the librarian",
-    placeholder: "Is Deep Learning by Goodfellow available?",
-    comingSoon: "ask about availability, your loans, fines and what to read next.",
-  });
-}
+// Built once and kept between refreshes, so the conversation survives a Borrow or Reserve.
+let askPanel = null;
 
 // ---------- page ----------
 
@@ -111,8 +107,11 @@ async function load() {
     notices(reservations),
     statStrip(loans, reservations),
     h("div", { class: "columns" }, deskSection(loans), picksSection(picks)),
-    askPanel());
-  if (window.location.hash === "#ask") document.getElementById("ask").scrollIntoView();
+    askPanel = askPanel || chatPanel());
+  if (window.location.hash === "#ask") {
+    document.getElementById("ask").scrollIntoView();
+    document.getElementById("ask-input").focus({ preventScroll: true });
+  }
 }
 
 function reload() {

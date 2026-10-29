@@ -377,6 +377,37 @@ select.input { padding-right: var(--space-7); }
 }
 .dark-panel .input::placeholder { color: var(--color-on-dark-muted); }
 .dark-panel .input:disabled { cursor: not-allowed; }
+.dark-panel .btn-quiet { color: var(--color-on-dark-muted); border-color: var(--color-dark-field-border); }
+.dark-panel .btn-quiet:hover:not(:disabled) { background: var(--color-dark-hover); color: var(--color-on-dark); }
+
+/* Chat in the dark panel: question in muted text, answer in full colour */
+.chat-log { display: flex; flex-direction: column; gap: var(--space-4); }
+.chat-log:empty { display: none; }
+.chat-exchange {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding-bottom: var(--space-4);
+  border-bottom: var(--border-width) solid var(--color-dark-field-border);
+  animation: fade-in var(--duration) var(--ease);
+}
+.chat-who {
+  display: block;
+  font-size: var(--text-xs);
+  letter-spacing: var(--tracking-eyebrow);
+  text-transform: uppercase;
+  color: var(--color-on-dark-muted);
+}
+.chat-question { color: var(--color-on-dark-muted); }
+.chat-answer { max-width: 75ch; white-space: pre-line; }
+.chat-answer.pending { color: var(--color-on-dark-muted); animation: pulse 1.4s ease-in-out infinite; }
+.chat-answer.refused, .chat-answer.unavailable { color: var(--color-on-dark-muted); font-style: italic; }
+.chat-answer.error { color: var(--color-on-dark); border-left: 3px solid var(--color-accent-ink); padding-left: var(--space-3); }
+.chat-suggestions { display: flex; flex-wrap: wrap; gap: var(--space-2); }
+.chat-suggestions[hidden] { display: none; }
+@media (prefers-reduced-motion: reduce) {
+  .chat-answer.pending { animation: none; }
+}
 
 /* ---------- stat strip ---------- */
 
@@ -755,6 +786,51 @@ select.input { padding-right: var(--space-7); }
   padding-top: 18px;
 }
 .login-corner { position: absolute; top: var(--space-4); right: var(--space-4); }
+
+/* Demo mode: "Try a demo account". Each account is a row with a book-spine edge in its role's colour. */
+.demo-panel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding-top: 18px;
+  border-top: var(--border-width) solid var(--color-border);
+  animation: fade-in var(--duration) var(--ease);
+}
+.demo-panel h3 { font-size: var(--text-lg); }
+.demo-accounts { display: flex; flex-direction: column; gap: var(--space-2); }
+.demo-account {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: 100%;
+  padding: var(--space-3) var(--space-4);
+  background: var(--color-surface);
+  color: var(--color-text);
+  border: var(--border-width) solid var(--color-border);
+  border-left: 4px solid var(--spine, var(--cover-book));
+  border-radius: var(--radius);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color var(--duration-fast) var(--ease), background-color var(--duration-fast) var(--ease);
+}
+.demo-account:hover { background: var(--color-disabled); }
+.demo-account[aria-pressed="true"] { border-color: var(--color-accent-ink); border-left-color: var(--spine, var(--cover-book)); }
+.demo-account .role { font-family: var(--font-serif); font-size: var(--text-md); }
+.demo-account .who, .demo-account .what { font-size: var(--text-sm); color: var(--color-muted); }
+.demo-account[data-role="Student"] { --spine: var(--cover-book); }
+.demo-account[data-role="Faculty"] { --spine: var(--cover-magazine); }
+.demo-account[data-role="Librarian"] { --spine: var(--cover-thesis); }
+:root[data-theme="dark"] .demo-account[data-role="Librarian"] { --spine: var(--cover-reference); }
+.demo-reset {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2) var(--space-3);
+  align-items: center;
+  justify-content: space-between;
+  font-size: var(--text-sm);
+  color: var(--color-muted);
+}
 @media (max-width: 860px) {
   .login-hero, .login-main { padding: var(--space-6) var(--gutter); }
   .login-hero { gap: var(--space-5); }

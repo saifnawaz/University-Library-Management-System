@@ -339,8 +339,8 @@ export function paymentToast(member, { forStaff = false } = {}) {
 }
 
 /**
- * The dark "ask" panel, switched off until the chat assistant exists (Phase 9).
- * Members get ChatAssistant and staff get StaffAssistant; both share this panel.
+ * A switched-off "ask" panel marked "Coming soon". Used on the staff overview until
+ * StaffAssistant exists; members already have the live one (chatPanel() in assistant.js).
  */
 export function assistantPanel({ title, placeholder, comingSoon }) {
   return h("section", { class: "dark-panel", id: "ask", "aria-labelledby": "ask-title" },

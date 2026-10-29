@@ -70,3 +70,18 @@ class NotAuthenticated(LibraryException):
 
     default_message = "Please log in."
     http_status = 401  # Unauthorized
+
+
+class RateLimited(LibraryException):
+    """Raised when someone does the same thing too often in a short time (e.g. chat questions)."""
+
+    default_message = "Too many requests. Please wait a moment and try again."
+    http_status = 429  # Too Many Requests
+
+
+class LLMError(Exception):
+    """Raised by an LLM client when the language model can't give an answer.
+
+    Not a LibraryException: users never see it. ChatAssistant catches it and
+    answers with a friendly fallback message instead.
+    """

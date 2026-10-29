@@ -734,10 +734,11 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 
 from app import create_app
+from services.llm_client import FakeLLMClient
 
 
 @contextmanager
-def _client() -> Iterator[Any]:
+def _client(demo_mode: bool = False) -> Iterator[Any]:
     """A Flask test client for an app whose database holds the _library() data."""
     with tempfile.TemporaryDirectory() as tmp:
         path = os.path.join(tmp, "app.db")
@@ -747,7 +748,8 @@ def _client() -> Iterator[Any]:
         lib.save_to(db)
         db.close()
         Library.reset()
-        app = create_app(db_path=path, secret_key="test-secret")
+        app = create_app(db_path=path, secret_key="test-secret", demo_mode=demo_mode,
+                         llm=FakeLLMClient("Fake answer from the test LLM."))
         app.config["DB_PATH"] = path
         yield app.test_client()
         Library.reset()
@@ -825,7 +827,7 @@ def test_route_changes_are_saved() -> None:
         c.post("/api/loans", json={"item_id": "B2"})
         path = c.application.config["DB_PATH"]
         Library.reset()                                                 # restart the app
-        c2 = create_app(db_path=path, secret_key="test-secret").test_client()
+        c2 = create_app(db_path=path, secret_key="test-secret", llm=FakeLLMClient()).test_client()
         _login(c2, "S1")
         assert [l["item_id"] for l in c2.get("/api/me/loans").get_json()["current"]] == ["B2"]
 
@@ -1189,6 +1191,257 @@ def test_seed_recommendations() -> None:
     assert len(picks) == 3 and "B002" not in [p["item_id"] for p in picks]  # B002: reserved
     assert any(p["reason"].startswith("Members who borrowed") for p in picks)
     assert all(p["reason"].startswith("Popular") for p in lib.recommendations_for(stu03, "stu03"))
+
+
+# ---------- Demo mode ----------
+
+def test_demo_mode_off_has_no_demo_routes() -> None:
+    with _client() as c:
+        assert c.get("/api/demo/accounts").status_code == 404
+        assert c.post("/api/demo/reset").status_code == 404
+    # Nothing on the login page gives the demo logins away
+    for path in ("static/login.html", "static/js/login.js"):
+        text = (PROJECT_ROOT / path).read_text(encoding="utf-8")
+        assert "student123" not in text and "librarian123" not in text, path
+
+
+def test_demo_flag_from_env() -> None:
+    from app import env_flag
+    old = os.environ.get("DEMO_MODE")
+    try:
+        for value, expected in (("1", True), ("true", True), ("On", True), ("0", False), ("", False)):
+            os.environ["DEMO_MODE"] = value
+            assert env_flag("DEMO_MODE") is expected, value
+    finally:
+        if old is None:
+            os.environ.pop("DEMO_MODE", None)
+        else:
+            os.environ["DEMO_MODE"] = old
+
+
+def _demo_client() -> Any:
+    """A demo-mode client whose database starts with the seed data."""
+    from contextlib import ExitStack
+    stack = ExitStack()
+    c = stack.enter_context(_client(demo_mode=True))
+    c.post("/api/demo/reset")  # replace the test data with the seed data
+    return stack, c
+
+
+def test_demo_accounts_come_from_python() -> None:
+    stack, c = _demo_client()
+    with stack:
+        accounts = c.get("/api/demo/accounts").get_json()
+        assert [a["role"] for a in accounts] == ["Student", "Faculty", "Librarian"]
+        assert [a["user_id"] for a in accounts] == ["stu01", "fac01", "lib01"]
+        assert accounts[0]["summary"] == "Borrows up to 3 items for 14 days"
+        assert accounts[1]["summary"].endswith("including theses")
+        for a in accounts:  # every demo login really works
+            r = _login(c, a["user_id"], a["password"])
+            assert r.status_code == 200 and r.get_json()["role"] == a["role"]
+
+
+def test_demo_reset_restores_seed_data_and_saves() -> None:
+    stack, c = _demo_client()
+    with stack:
+        app_db = c.application.config["DB_PATH"]
+        _login(c, "stu03", "student123")
+        assert c.post("/api/loans", json={"item_id": "B003"}).status_code == 201
+        assert c.post("/api/demo/reset").status_code == 200
+        assert c.get("/api/me").status_code == 401  # reset signs everyone out of this browser
+        _login(c, "stu03", "student123")
+        assert c.get("/api/me/loans").get_json()["current"] == []
+        # The reset was saved, not only changed in memory
+        Library.reset()
+        lib = Library()
+        db = Database(app_db)
+        lib.load_from(db)
+        db.close()
+        assert not lib.get_user("stu03").loans and lib.get_waitlist("B002")
+
+
+def test_demo_reset_is_rate_limited() -> None:
+    stack, c = _demo_client()  # one reset already used
+    with stack:
+        assert c.post("/api/demo/reset").status_code == 200
+        r = c.post("/api/demo/reset")
+        assert r.status_code == 429 and _error(r)["type"] == "RateLimited"
+
+
+def test_rate_limiter_window() -> None:
+    from services.rate_limiter import RateLimiter
+    from exceptions import RateLimited
+    now = [0.0]
+    limiter = RateLimiter(2, 60, clock=lambda: now[0])
+    limiter.check("a")
+    limiter.check("a")
+    e = _expect(RateLimited, limiter.check, "a", "questions")
+    assert "2 questions" in e.message and e.next_step == "Please wait 60 seconds and try again."
+    limiter.check("b")          # each key has its own count
+    now[0] = 60.0
+    limiter.check("a")          # the first two have left the window
+    _expect(ValueError, RateLimiter, 0, 60)
+
+
+# ---------- Phase 9: ChatAssistant, TopicGuard, LLM clients ----------
+
+from exceptions import LLMError, RateLimited
+from services.chat_assistant import ChatAssistant, build_assistant
+from services.llm_client import GeminiClient, LLMClient
+from services.rate_limiter import RateLimiter
+from services.topic_guard import KeywordTopicGuard, LLMTopicGuard, TopicGuard
+
+
+def _guard_aware_fake(answer: str = "Here is what the catalog shows.") -> FakeLLMClient:
+    """A fake that says LIBRARY when used as the topic classifier, else gives `answer`."""
+    return FakeLLMClient(lambda system, message: "LIBRARY" if "sort messages" in system else answer)
+
+
+def test_keyword_topic_guard() -> None:
+    guard = KeywordTopicGuard(lambda: {"goodfellow", "clean", "code"})
+    for q in ("Is Clean Code available?", "When is my book due?", "How much do I owe?",
+              "Can I reserve a thesis?", "hello", "Anything by Goodfellow?"):
+        assert guard.is_library_question(q), q
+    for q in ("What's the weather today?", "What's my GPA?", "When is the next holiday?",
+              "Tell me the latest news"):
+        assert not guard.is_library_question(q), q
+    assert isinstance(guard, TopicGuard)
+    _expect(TypeError, TopicGuard)  # abstract
+
+
+def test_llm_topic_guard_asks_only_when_keywords_miss() -> None:
+    fake = FakeLLMClient("OTHER")
+    guard = LLMTopicGuard(fake, prefilter=KeywordTopicGuard())
+    assert guard.is_library_question("Can I borrow this?") and fake.calls == []  # keywords said yes
+    assert not guard.is_library_question("Who won the match?")
+    assert len(fake.calls) == 1 and fake.calls[0][1] == "Who won the match?"
+    assert LLMTopicGuard(FakeLLMClient("LIBRARY")).is_library_question("Got Harry Potter?")
+    _expect(LLMError, LLMTopicGuard(FakeLLMClient(fail=True)).is_library_question, "Who won?")
+
+
+def test_chat_refuses_off_topic_before_the_main_call() -> None:
+    lib, staff, s, f = _library()
+    fake = FakeLLMClient("OTHER")
+    assistant = build_assistant(lib, fake)
+    for q in ("What's the weather today?", "What's my GPA?"):
+        reply = assistant.ask(s, q)
+        assert reply.kind == "refused" and reply.answer == ChatAssistant.REFUSAL
+    # Only the classifier ran; the main prompt (with library data) was never sent
+    assert all("LIBRARY DATA" not in message for _, message in fake.calls)
+
+
+def test_chat_context_is_only_this_members_data() -> None:
+    import seed
+    lib = seed.build_library()
+    fake = _guard_aware_fake()
+    me = lib.get_user("stu02")
+    reply = build_assistant(lib, fake).ask(me, "Is Database System Concepts available?")
+    assert reply == type(reply)("Here is what the catalog shows.", "answer")
+    system, message = fake.calls[-1]
+    assert "Never invent" in system and "Bilal" not in system  # data goes in the message only
+    assert "Bilal Ahmed (Student)" in message
+    assert '"Introduction to Algorithms"' in message and "OVERDUE by" in message  # own loan
+    assert "Current fine (charged, payable now): Rs 30" in message                # own fine
+    assert '"Database System Concepts"' in message and "Status: " in message       # search hit
+    assert "RECOMMENDED FOR THIS MEMBER" in message
+    for user_id, name, _, _ in seed.ACCOUNTS:
+        user = lib.get_user(user_id)
+        assert user.password_hash not in message and user.password_hash not in system
+        if user is not me:
+            assert name not in message, f"other member's name sent: {name}"
+            assert user_id not in message
+
+
+def test_chat_context_says_when_nothing_matches() -> None:
+    lib, staff, s, f = _library()
+    fake = _guard_aware_fake()
+    build_assistant(lib, fake).ask(s, "Do you have Harry Potter?")
+    assert "No catalog items matched the question." in fake.calls[-1][1]
+
+
+def test_chat_falls_back_when_llm_fails_or_is_missing() -> None:
+    lib, staff, s, f = _library()
+    broken = build_assistant(lib, FakeLLMClient(fail=True))
+    for q in ("Is Clean Code available?", "Got anything by Tolkien?"):  # main call / guard call fails
+        reply = broken.ask(s, q)
+        assert reply.kind == "unavailable" and reply.answer == ChatAssistant.FALLBACK
+    no_key = build_assistant(lib, None)
+    assert no_key.ask(s, "Is Clean Code available?").kind == "unavailable"
+    assert no_key.ask(s, "What's my GPA?").kind == "refused"  # keyword guard still works
+
+
+def test_chat_checks_input_permission_and_rate() -> None:
+    lib, staff, s, f = _library()
+    now = [0.0]
+    assistant = ChatAssistant(lib, FakeLLMClient(), KeywordTopicGuard(),
+                              RateLimiter(2, 60, clock=lambda: now[0]))
+    _expect(ValueError, assistant.ask, s, "   ")
+    _expect(ValueError, assistant.ask, s, "book " * 200)
+    _expect(PermissionDenied, assistant.ask, staff, "Is Clean Code available?")
+    assistant.ask(s, "Is Clean Code available?")
+    assistant.ask(s, "What's my GPA?")                    # refused questions count too
+    e = _expect(RateLimited, assistant.ask, s, "Any fines?")
+    assert e.http_status == 429 and e.next_step
+    assert assistant.ask(f, "Any fines?").kind == "answer"  # limits are per member
+    now[0] = 61
+    assert assistant.ask(s, "Any fines?").kind == "answer"
+
+
+def test_chat_answer_is_plain_text() -> None:
+    lib, staff, s, f = _library()
+    fake = FakeLLMClient("**Clean Code** is on the shelf.")
+    assert build_assistant(lib, fake).ask(s, "Is Clean Code in?").answer == "Clean Code is on the shelf."
+
+
+def test_gemini_client_wraps_every_failure() -> None:
+    old = os.environ.pop("GEMINI_API_KEY", None)
+    try:
+        assert GeminiClient.from_env() is None
+    finally:
+        if old is not None:
+            os.environ["GEMINI_API_KEY"] = old
+    _expect(ValueError, GeminiClient, "")
+    client = GeminiClient("not-a-real-key")  # creating it sends nothing
+    assert isinstance(client, LLMClient) and client.model == GeminiClient.DEFAULT_MODEL
+
+    class Stub:  # stands in for the SDK's client.models, so no request leaves the machine
+        def __init__(self, result: Any) -> None:
+            self.models = self
+            self._result = result
+
+        def generate_content(self, **kwargs: Any) -> Any:
+            if isinstance(self._result, Exception):
+                raise self._result
+            return self._result
+
+    class Response:
+        def __init__(self, text: str | None) -> None:
+            self.text = text
+
+    client._client = Stub(ConnectionError("no network"))
+    _expect(LLMError, client.generate, "system", "hi")
+    client._client = Stub(Response(None))                  # e.g. a blocked reply
+    _expect(LLMError, client.generate, "system", "hi")
+    client._client = Stub(Response("  Clean Code is in.  "))
+    assert client.generate("system", "hi") == "Clean Code is in."
+
+
+def test_route_chat() -> None:
+    with _client() as c:
+        assert c.post("/api/chat", json={"question": "Any fines?"}).status_code == 401
+        _login(c, "S1")
+        r = c.post("/api/chat", json={"question": "Is Clean Code available?"})
+        assert r.status_code == 200
+        assert r.get_json() == {"answer": "Fake answer from the test LLM.", "kind": "answer"}
+        assert c.post("/api/chat", json={"question": "What's my GPA?"}).get_json()["kind"] == "refused"
+        r = c.post("/api/chat", json={"question": ""})
+        assert r.status_code == 400 and _error(r)["message"] == "Type a question first."
+        for _ in range(3):
+            c.post("/api/chat", json={"question": "When is my book due?"})
+        r = c.post("/api/chat", json={"question": "When is my book due?"})
+        assert r.status_code == 429 and _error(r)["type"] == "RateLimited"
+        _login(c, "L1")
+        assert c.post("/api/chat", json={"question": "Any fines?"}).status_code == 403
 
 
 # ---------- runner ----------
