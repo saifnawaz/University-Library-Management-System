@@ -91,9 +91,8 @@
   --content-width: 1264px;
   --content-width-wide: 1504px;
   --gutter: 16px;
-  /* Assistant panel as a right-hand column (1100px and wider) */
-  --assistant-width: 380px;
-  --assistant-max-height: 880px;
+  /* Assistant panel docked on the right (1100px and wider): about 30% of the window */
+  --assistant-width: clamp(400px, 30vw, 560px);
 
   /* ---- motion ---- */
   --ease: cubic-bezier(0.2, 0.7, 0.2, 1);

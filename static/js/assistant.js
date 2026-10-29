@@ -85,14 +85,14 @@ export function assistantPanel({ title, endpoint, answerer, placeholder, suggest
     h("p", { class: "muted small chat-note" }, note));
 }
 
-/** Show the newest exchange (only matters when the log scrolls, in the side column). */
+/** Show the newest exchange (only matters when the log scrolls, in the docked sidebar). */
 function scrollToEnd(log) {
   log.scrollTop = log.scrollHeight;
 }
 
 /**
- * The page layout with an assistant: the content, then the panel. CSS puts the panel in a
- * sticky right-hand column on wide screens and keeps it at the bottom on narrow ones.
+ * The page layout with an assistant: the content, then the panel. CSS docks the panel to
+ * the right edge on wide screens and keeps it at the bottom on narrow ones.
  */
 export function withAssistant(panel, ...content) {
   // Moving the kept panel into the new layout resets its scroll; go back to the newest answer.

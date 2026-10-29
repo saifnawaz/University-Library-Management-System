@@ -121,7 +121,8 @@ main.page {
 }
 
 /* Pages with an assistant (member dashboard, staff overview): one column with the panel
-   last on narrow screens; from 1100px the panel is a sticky column on the right. */
+   last on narrow screens. From 1100px the page becomes a frame: the nav on top, the panel
+   docked to the right edge at full height, and the content scrolling in the space left. */
 .with-assistant {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
@@ -136,13 +137,40 @@ main.page {
   container: page-flow / inline-size;
 }
 @media (min-width: 1100px) {
-  .with-assistant { grid-template-columns: minmax(0, 1fr) var(--assistant-width); }
+  body:has(> main > .with-assistant) {
+    display: flex;
+    flex-direction: column;
+    height: 100vh;
+    height: 100dvh;
+    overflow: hidden;
+  }
+  body:has(> main > .with-assistant) > .topnav { flex: none; }
+  main.page:has(> .with-assistant) {
+    flex: 1 1 auto;
+    min-height: 0;
+    max-width: none;
+    padding: 0;
+  }
+  .with-assistant {
+    flex: 1 1 auto;
+    min-height: 0;
+    grid-template-columns: minmax(0, 1fr) var(--assistant-width);
+    grid-template-rows: minmax(0, 1fr);
+    gap: 0;
+    align-items: stretch;
+  }
+  /* The content scrolls; it stays centred in its column at the usual max width */
+  .with-assistant > .page-flow {
+    overflow-y: auto;
+    padding-top: var(--space-7);
+    padding-bottom: calc(var(--space-8) * 1.5);
+    padding-inline: max(var(--space-7), (100% - var(--content-width)) / 2 + var(--gutter));
+  }
+  /* Part of the frame, not a card: square, flush right, nav to window bottom */
   .with-assistant > .assistant {
-    position: sticky;
-    top: var(--space-5);
-    height: calc(100vh - 2 * var(--space-5));
-    height: calc(100dvh - 2 * var(--space-5));
-    max-height: var(--assistant-max-height);
+    border-radius: 0;
+    border-left: var(--border-width) solid var(--color-border);
+    padding: var(--space-6);
   }
   /* Title and note on top, the conversation scrolls, starters and the input at the bottom */
   .assistant > h2 { order: -2; }
