@@ -4,7 +4,7 @@
 import { api, ApiError } from "./api.js";
 import {
   h, boot, startPage, stat, busy, toast, toastError, dueText, formatDate, formatMoney, plural,
-  loadingState, emptyState, errorState,
+  blockedNotice, paymentToast, loadingState, emptyState, errorState,
 } from "./ui.js";
 
 const main = document.getElementById("main");
@@ -60,7 +60,7 @@ function loansTable(member, loans) {
     h("table", { class: "table" },
       h("thead", {}, h("tr", {},
         h("th", {}, "Item"), h("th", {}, "Due"), h("th", {}, "Status"),
-        h("th", { class: "num" }, "Fine so far"), h("th", { class: "actions" }, h("span", { class: "visually-hidden" }, "Actions")))),
+        h("th", { class: "num" }, "Adds on return"), h("th", { class: "actions" }, h("span", { class: "visually-hidden" }, "Actions")))),
       h("tbody", {}, loans.current.map((loan) => {
         const button = h("button", { class: "btn btn-quiet btn-small", type: "button" }, "Return");
         button.addEventListener("click", async () => {
@@ -68,7 +68,7 @@ function loansTable(member, loans) {
           try {
             const done = await api.post("/api/loans/return", { member_id: member.user_id, item_id: loan.item_id });
             toast("Returned", done.fine
-              ? `"${done.item_title}". Fine added: ${formatMoney(done.fine)}.`
+              ? `"${done.item_title}". ${formatMoney(done.fine)} added to the current fine.`
               : `"${done.item_title}", on time.`);
             loadMember();
           } catch (error) {
@@ -77,7 +77,7 @@ function loansTable(member, loans) {
           }
         });
         return h("tr", {},
-          h("td", {}, loan.item_title, h("div", { class: "muted small" }, loan.item_id)),
+          h("td", {}, loan.item_title, h("div", { class: "sub" }, loan.item_id)),
           h("td", { class: "nowrap" }, formatDate(loan.due_date)),
           h("td", { class: loan.overdue ? "late nowrap" : "nowrap" }, dueText(loan)),
           h("td", { class: "num" }, loan.fine ? formatMoney(loan.fine) : "—"),
@@ -85,37 +85,40 @@ function loansTable(member, loans) {
       }))));
 }
 
-function finePanel(member) {
-  const panel = h("section", { class: "panel" },
+function finesSection(member) {
+  const section = h("section", { class: "section" },
     h("h2", {}, "Fines"),
-    h("div", {},
-      h("div", { class: `stat-value ${member.fines > 0 ? "tone-warn" : ""}` }, formatMoney(member.fines)),
-      h("div", { class: "stat-label" }, member.fine_policy)));
-  if (member.fines <= 0) {
-    panel.append(h("p", { class: "muted" }, "No fines outstanding."));
-    return panel;
+    h("div", { class: "figures" },
+      h("div", { class: "figure" },
+        h("div", { class: `stat-value ${member.current_fine > 0 ? "tone-warn" : ""}` }, formatMoney(member.current_fine)),
+        h("div", { class: "stat-label" }, h("strong", {}, "Current fine"), h("br"), "Charged, payable now")),
+      h("div", { class: "figure" },
+        h("div", { class: "stat-value" }, formatMoney(member.total_fine)),
+        h("div", { class: "stat-label" }, h("strong", {}, "Total fine"), h("br"), member.accruing_fine > 0
+          ? `Includes ${formatMoney(member.accruing_fine)} added when overdue items come back`
+          : "Nothing more is building up"))));
+  if (member.current_fine > 0) {
+    const amount = h("input", { class: "input input-bright", id: "fine-amount", type: "number",
+      min: "1", step: "any", value: String(member.current_fine) });
+    const button = h("button", { class: "btn btn-primary", type: "submit" }, "Record payment");
+    const form = h("form", { class: "inline-form", novalidate: true },
+      h("div", { class: "field" }, h("label", { for: "fine-amount" }, "Amount (Rs)"), amount), button);
+    form.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const restore = busy(button, "Saving…");
+      try {
+        const updated = await api.post("/api/fines/pay", { member_id: member.user_id, amount: amount.value });
+        paymentToast(updated, { forStaff: true });
+        loadMember();
+      } catch (error) {
+        restore();
+        toastError(error, "Couldn't record the payment");
+      }
+    });
+    section.append(form);
   }
-  const amount = h("input", { class: "input input-bright", id: "fine-amount", type: "number",
-    min: "1", step: "any", value: String(member.fines) });
-  const button = h("button", { class: "btn btn-primary", type: "submit" }, "Record payment");
-  const form = h("form", { class: "row", novalidate: true, style: { alignItems: "flex-end" } },
-    h("div", { class: "field", style: { flex: "1 1 140px" } }, h("label", { for: "fine-amount" }, "Amount (Rs)"), amount),
-    button);
-  form.addEventListener("submit", async (event) => {
-    event.preventDefault();
-    const restore = busy(button, "Saving…");
-    try {
-      const updated = await api.post("/api/fines/pay", { member_id: member.user_id, amount: amount.value });
-      toast("Payment recorded", updated.fines > 0
-        ? `${formatMoney(updated.fines)} still outstanding.` : `${member.name}'s fines are cleared.`);
-      loadMember();
-    } catch (error) {
-      restore();
-      toastError(error, "Couldn't record the payment");
-    }
-  });
-  panel.append(form);
-  return panel;
+  section.append(h("p", { class: "rule-line" }, `Late returns: ${member.fine_policy}`));
+  return section;
 }
 
 function reservationsSection(member, reservations) {
@@ -166,15 +169,15 @@ async function loadMember() {
       member.can_borrow
         ? h("div", { class: "notice ok" }, h("strong", {}, "Can borrow. "),
             `${plural(member.loans_remaining, "more item")} allowed right now.`)
-        : h("div", { class: "notice warn" }, h("strong", {}, "Borrowing is paused. "), member.borrow_block_reason),
+        : blockedNotice(member),
       h("div", { class: "stats" },
         stat(h("span", {}, String(member.active_loans), h("small", {}, ` / ${member.borrow_limit}`)), "On loan"),
         stat(String(member.overdue_loans), "Overdue", member.overdue_loans ? "warn" : ""),
-        stat(formatMoney(member.fines), "Outstanding fines", member.fines > 0 ? "warn" : ""),
+        stat(formatMoney(member.current_fine), "Current fine", member.current_fine > 0 ? "warn" : ""),
+        stat(formatMoney(member.total_fine), "Total fine"),
         stat(String(reservations.length), "Reservations")),
-      h("div", { class: "columns" },
-        h("section", { class: "section" }, h("h2", {}, "On loan"), loansTable(member, loans)),
-        h("div", { class: "section" }, issueBox(member), finePanel(member))),
+      h("section", { class: "section" }, h("h2", {}, "On loan"), loansTable(member, loans)),
+      h("div", { class: "columns" }, issueBox(member), finesSection(member)),
       reservationsSection(member, reservations));
   } catch (error) {
     if (error instanceof ApiError && (error.status === 404 || error.status === 403)) {

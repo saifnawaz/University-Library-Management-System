@@ -85,12 +85,16 @@ def create_app(db_path: str | None = None, secret_key: str | None = None) -> Fla
 
     # ---- errors: always clean JSON, never a stack trace ----
 
-    def error(kind: str, message: str, status: int) -> tuple[Response, int]:
-        return jsonify(error={"type": kind, "message": message}), status
+    def error(kind: str, message: str, status: int,
+              next_step: str | None = None) -> tuple[Response, int]:
+        body: dict[str, str] = {"type": kind, "message": message}
+        if next_step:
+            body["next_step"] = next_step  # what the user can do about it
+        return jsonify(error=body), status
 
     @app.errorhandler(LibraryException)
     def handle_library_error(e: LibraryException) -> tuple[Response, int]:
-        return error(type(e).__name__, e.message, e.http_status)
+        return error(type(e).__name__, e.message, e.http_status, e.next_step)
 
     @app.errorhandler(ValueError)
     def handle_bad_input(e: ValueError) -> tuple[Response, int]:
@@ -198,7 +202,9 @@ def create_app(db_path: str | None = None, secret_key: str | None = None) -> Fla
         return jsonify(
             current=[loan.to_dict() for loan in member.loans],
             history=[loan.to_dict() for loan in reversed(member.history)],  # newest first
-            fines=member.fines,
+            current_fine=member.current_fine,
+            accruing_fine=member.accruing_fine(),
+            total_fine=member.total_fine(),
             fine_policy=member.get_fine_policy().describe(),
         )
 

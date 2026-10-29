@@ -2,10 +2,11 @@
 // readable message, never a raw response or stack trace.
 
 export class ApiError extends Error {
-  constructor(message, type, status) {
+  constructor(message, type, status, nextStep = null) {
     super(message);
-    this.type = type;      // e.g. "LimitExceeded", from the Python exception
-    this.status = status;  // HTTP status; 0 means the server could not be reached
+    this.type = type;          // e.g. "LimitExceeded", from the Python exception
+    this.status = status;      // HTTP status; 0 means the server could not be reached
+    this.nextStep = nextStep;  // what the user can do about it, if Python said
   }
 }
 
@@ -31,7 +32,8 @@ async function request(method, url, body) {
     throw new ApiError(
       (error && error.message) || "Something went wrong. Please try again.",
       (error && error.type) || "Error",
-      response.status);
+      response.status,
+      (error && error.next_step) || null);
   }
   return data;
 }

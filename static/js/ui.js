@@ -30,6 +30,7 @@ export function h(tag, props = {}, ...children) {
     if (child === null || child === undefined || child === false) continue;
     el.append(child instanceof Node ? child : document.createTextNode(String(child)));
   }
+  if (tag === "table") labelledTable(el); // header labels for the phone layout
   return el;
 }
 
@@ -264,6 +265,15 @@ export function bookTile(item, handlers, index = 0, { compact = false } = {}) {
     bookButton(item, handlers));
 }
 
+/** Copy each column header onto its cells as data-label, so phones can show "Due: 4 Nov". */
+export function labelledTable(table) {
+  const labels = [...table.querySelectorAll("thead th")].map((th) => th.textContent.trim());
+  for (const row of table.querySelectorAll("tbody tr")) {
+    [...row.children].forEach((cell, i) => { if (labels[i]) cell.dataset.label = labels[i]; });
+  }
+  return table;
+}
+
 /** Put a button into its "working" state; returns a function that restores it. */
 export function busy(button, text) {
   const old = button.textContent;
@@ -304,7 +314,32 @@ export function toast(title, message = "", kind = "success") {
 }
 
 export function toastError(error, title = "That didn't work") {
-  toast(title, error instanceof ApiError ? error.message : "Something went wrong. Please try again.", "error");
+  const message = error instanceof ApiError
+    ? [error.message, error.nextStep].filter(Boolean).join(" ")
+    : "Something went wrong. Please try again.";
+  toast(title, message, "error");
+}
+
+/** "Borrowing is paused" notice from the member's own block reason and next step, or "". */
+export function blockedNotice(member) {
+  if (member.can_borrow) return "";
+  return h("div", { class: "notice warn", role: "status" },
+    h("strong", {}, "Borrowing is paused. "), member.borrow_block_reason,
+    member.borrow_next_step ? h("span", { class: "next" }, member.borrow_next_step) : null);
+}
+
+/** Toast after a fine payment: what is left, and what (if anything) still blocks borrowing. */
+export function paymentToast(member, { forStaff = false } = {}) {
+  const left = member.current_fine > 0 ? `${formatMoney(member.current_fine)} of the current fine is left. ` : "";
+  const next = member.can_borrow
+    ? (forStaff ? `${member.name} can borrow again.` : "You can borrow again.")
+    : member.borrow_next_step || member.borrow_block_reason;
+  toast(forStaff ? "Payment recorded" : "Fine paid", left + next);
+}
+
+/** How an overdue loan's fine reads before it is charged. */
+export function accruingText(loan) {
+  return `adds ${formatMoney(loan.fine)} when returned`;
 }
 
 // ---------- page states ----------

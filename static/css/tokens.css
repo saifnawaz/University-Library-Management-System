@@ -48,39 +48,41 @@
   /* ---- type ---- */
   --font-serif: "Fraunces", Georgia, "Times New Roman", serif;
   --font-sans: "Source Sans 3", system-ui, -apple-system, "Segoe UI", sans-serif;
-  --text-xs: 13px;
-  --text-sm: 14px;
-  --text-base: 15px;
-  --text-md: 17px;
-  --text-lg: 18px;
-  --text-xl: 22px;
-  --text-2xl: 32px;
-  --text-stat: 34px;
-  --text-h1: clamp(30px, 4.5vw, 40px);
-  --text-display: clamp(36px, 5.5vw, 52px);
-  --leading-tight: 1.1;
-  --leading-normal: 1.5;
-  --tracking-eyebrow: 0.12em;
+  /* Nothing smaller than 14px anywhere */
+  --text-xs: 14px;
+  --text-sm: 15px;
+  --text-base: 16px;
+  --text-md: 18px;
+  --text-lg: 20px;
+  --text-xl: 24px;
+  --text-2xl: 34px;
+  --text-stat: 30px;
+  --text-h1: clamp(32px, 4.5vw, 44px);
+  --text-display: clamp(38px, 5.5vw, 56px);
+  --leading-tight: 1.15;
+  --leading-normal: 1.55;
+  --tracking-eyebrow: 0.1em;
 
   /* ---- spacing ---- */
   --space-1: 4px;
   --space-2: 8px;
   --space-3: 12px;
   --space-4: 16px;
-  --space-5: 20px;
-  --space-6: 28px;
-  --space-7: 40px;
-  --space-8: 56px;
+  --space-5: 24px;
+  --space-6: 32px;
+  --space-7: 48px;
+  --space-8: 64px;
+  --space-section: clamp(48px, 6vw, 64px);  /* between sections of a page */
 
   /* ---- shape ---- */
   --radius-sm: 2px;
   --radius: 4px;
   --border-width: 1px;
-  --control-height: 46px;
-  --button-height: 44px;
+  --control-height: 48px;
+  --button-height: 46px;
 
   /* ---- layout ---- */
-  --content-width: 1120px;
+  --content-width: 1264px;  /* 1200px of content plus the 32px gutters */
   --gutter: 16px;
 
   /* ---- motion ---- */

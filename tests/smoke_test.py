@@ -410,7 +410,7 @@ def test_overdue_loan_blocks_borrowing_with_zero_fines() -> None:
     lib, staff, s, f = _library()
     lib.issue(staff, "S1", "B1", today=date(2026, 1, 1))          # due 15 Jan
     later = date(2026, 1, 20)
-    assert s.fines == 0
+    assert s.current_fine == 0
     e = _expect(OverdueLoans, lib.issue, staff, "S1", "B2", later)
     assert "overdue" in str(e)
     assert not s.can_borrow(later)
@@ -420,7 +420,7 @@ def test_return_charges_fine_and_frees_copy() -> None:
     lib, staff, s, f = _library()
     lib.issue(staff, "S1", "B1", today=date(2026, 1, 1))          # due 15 Jan
     loan = lib.return_item(staff, "S1", "B1", today=date(2026, 1, 19))  # 4 days late
-    assert loan.is_returned() and s.fines == 40
+    assert loan.is_returned() and s.current_fine == 40
     assert s.loans == [] and s.history == [loan]
     assert lib.get_item("B1").available_copies == 1
     _expect(UnpaidFines, lib.issue, staff, "S1", "B2")
@@ -566,7 +566,7 @@ def _snapshot(lib: Library) -> dict[str, Any]:
         users[uid] = {"role": u.get_role(), "name": u.name, "hash": u.password_hash}
         if isinstance(u, Member):
             users[uid].update(
-                fines=u.fines, notifications=u.notifications,
+                current_fine=u.current_fine, notifications=u.notifications,
                 loans=[(l.loan_id, l.item.item_id, l.issue_date, l.due_date) for l in u.loans],
                 history=[(l.loan_id, l.item.item_id, l.return_date) for l in u.history],
             )
@@ -623,7 +623,7 @@ def test_restart_keeps_state() -> None:
         _expect(OverdueLoans, fresh.issue, fresh.get_user("L1"), "F1", "B2")  # thesis still out
         loan = fresh.issue(fresh.get_user("L1"), "S2", "B2")
         assert loan.loan_id == 5
-        s.pay_fine(s.fines)
+        s.pay_fine(s.current_fine)
         fresh.cancel_reservation(s, "S1", "B1")
         assert "held for you" in other.notifications[-1]   # line was restored correctly
 
@@ -760,7 +760,7 @@ def _login(client: Any, user_id: str, password: str = "pw") -> Any:
 def _error(response: Any) -> dict[str, str]:
     """The error part of a JSON error response, checking its shape."""
     data = response.get_json()
-    assert set(data) == {"error"} and set(data["error"]) == {"type", "message"}, data
+    assert set(data) == {"error"} and {"type", "message"} <= set(data["error"]) <= {"type", "message", "next_step"}, data
     return data["error"]
 
 
@@ -894,7 +894,7 @@ def test_route_fine_payment() -> None:
         r = c.post("/api/fines/pay", json={"amount": 80})               # more than owed
         assert r.status_code == 400 and _error(r)["type"] == "InvalidInput"
         r = c.post("/api/fines/pay", json={"amount": 50})
-        assert r.status_code == 200 and r.get_json()["fines"] == 0
+        assert r.status_code == 200 and r.get_json()["current_fine"] == 0
 
 
 def test_route_bad_requests_are_clean_json() -> None:
@@ -928,7 +928,7 @@ def test_seed_builds_a_valid_demo_library() -> None:
     assert {i.TYPE_KEY for i in lib.all_items()} == set(ItemFactory.ITEM_TYPES)
     assert lib.get_user("stu01").can_borrow()
     assert "overdue" in lib.get_user("stu02").borrow_block_reason() or \
-           "fines" in lib.get_user("stu02").borrow_block_reason()
+           "fine" in lib.get_user("stu02").borrow_block_reason()
     assert len(lib.overdue_loans(staff)) == 2
     assert [r.member.user_id for r in lib.get_waitlist("B002")] == ["stu01"]
     for user_id, _, password, _ in seed.ACCOUNTS:
@@ -999,6 +999,36 @@ def test_stats_recent_ranking() -> None:
     assert [r["item_id"] for r in stats["most_borrowed_recent"]] == ["B2"]   # B1 was too long ago
     assert {r["item_id"] for r in stats["most_borrowed"]} == {"B1", "B2"}
     assert stats["most_borrowed_recent"][0]["type"] == "book"
+
+
+def test_current_and_total_fine() -> None:
+    lib, staff, s, f = _library()
+    lib.issue(staff, "S1", "B1", today=date.today() - timedelta(days=30))   # 16 days late: Rs 160 accruing
+    lib.issue(staff, "S1", "M1", today=date.today() - timedelta(days=20))
+    lib.return_item(staff, "S1", "M1", today=date.today() - timedelta(days=10))  # 3 days late: Rs 30 charged
+    assert s.current_fine == 30                 # charged, payable now
+    assert s.accruing_fine() == 160             # added when B1 comes back
+    assert s.total_fine() == 190
+    stats = lib.stats(staff)
+    assert (stats["current_fines"], stats["accruing_fines"], stats["total_fines"]) == (30, 160, 190)
+    data = s.to_dict()
+    assert (data["current_fine"], data["accruing_fine"], data["total_fine"]) == (30, 160, 190)
+
+
+def test_next_step_after_paying_a_fine() -> None:
+    with _client() as c:
+        lib = Library()
+        staff = lib.get_user("L1")
+        lib.issue(staff, "S1", "B1", today=date.today() - timedelta(days=30))   # overdue
+        lib.get_user("S1").add_fine(30)
+        _login(c, "S1")
+        me = c.get("/api/me").get_json()
+        assert me["borrow_next_step"] == "Pay the current fine of Rs 30 to borrow again."
+        paid = c.post("/api/fines/pay", json={"amount": 30}).get_json()
+        assert paid["current_fine"] == 0 and paid["can_borrow"] is False
+        assert paid["borrow_next_step"] == 'Return "Clean Code" to borrow again.'
+        r = c.post("/api/loans", json={"item_id": "B2"})
+        assert r.status_code == 409 and _error(r)["next_step"] == 'Return "Clean Code" to borrow again.'
 
 
 def test_no_raw_colours_outside_tokens() -> None:

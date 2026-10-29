@@ -377,7 +377,10 @@ class Library:
             "active_loans": len(active),
             "overdue_loans": sum(1 for l in active if l.is_overdue(today)),
             "reservations": len(self._reservations),
-            "unpaid_fines": sum(m.fines for m in members),
+            # Current fines: charged and payable now. Total: plus what overdue loans add on return.
+            "current_fines": sum(m.current_fine for m in members),
+            "accruing_fines": sum(m.accruing_fine(today) for m in members),
+            "total_fines": sum(m.total_fine(today) for m in members),
             "most_borrowed": self._ranking(times_borrowed),
             "recent_days": self.RECENT_DAYS,
             "most_borrowed_recent": self._ranking(recent),

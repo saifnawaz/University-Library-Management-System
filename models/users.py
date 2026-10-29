@@ -111,7 +111,7 @@ class User(ABC):
 class Member(User):
     """Abstract base for users who borrow items (Student, Faculty)."""
 
-    # Members with unpaid fines above this amount cannot borrow.
+    # Members whose current fine is above this amount cannot borrow.
     # 0.0 means any unpaid fine blocks borrowing. Change here only.
     FINE_BLOCK_THRESHOLD: float = 0.0
 
@@ -120,7 +120,7 @@ class Member(User):
         super().__init__(user_id, name, password_hash)
         self._loans: list[Loan] = []    # items currently borrowed
         self._history: list[Loan] = []  # loans already returned
-        self._fines: float = 0.0        # unpaid fine balance
+        self._current_fine: float = 0.0  # charged and unpaid (payable now)
         self._notifications: list[str] = []  # messages from NotificationCenter
 
     # ---- properties ----
@@ -136,14 +136,27 @@ class Member(User):
         return list(self._history)
 
     @property
-    def fines(self) -> float:
-        """Unpaid fine balance (read-only; use add_fine / pay_fine)."""
-        return self._fines
+    def current_fine(self) -> float:
+        """Fine already charged and not yet paid; payable now (use add_fine / pay_fine)."""
+        return self._current_fine
 
     @property
     def notifications(self) -> list[str]:
         """Messages received, oldest first. Returns a copy."""
         return list(self._notifications)
+
+    # ---- fines ----
+    # Current fine: charged when a late item comes back, payable now.
+    # Accruing fine: what the overdue items still out will add when they are returned.
+    # Total fine: current + accruing (what the member would owe if everything came back today).
+
+    def accruing_fine(self, today: date | None = None) -> float:
+        """What overdue loans still out will add to the current fine when they are returned."""
+        return sum(loan.calculate_fine(today) for loan in self._loans)
+
+    def total_fine(self, today: date | None = None) -> float:
+        """Current fine plus what overdue loans will add when returned."""
+        return self._current_fine + self.accruing_fine(today)
 
     # ---- abstract rules each member type must define ----
 
@@ -166,22 +179,30 @@ class Member(User):
     # ---- borrowing rules ----
 
     def check_can_borrow(self, today: date | None = None) -> None:
-        """Raise UnpaidFines, OverdueLoans or LimitExceeded if this member may not borrow now."""
-        if self._fines > self.FINE_BLOCK_THRESHOLD:
-            raise UnpaidFines(f"{self.name} has unpaid fines of Rs {self._fines:g}.")
+        """Raise UnpaidFines, OverdueLoans or LimitExceeded if this member may not borrow now.
+
+        Each exception also carries next_step: what the member can do about it.
+        """
+        if self._current_fine > self.FINE_BLOCK_THRESHOLD:
+            raise UnpaidFines(
+                f"{self.name} has a current fine of Rs {self._current_fine:g}.",
+                next_step=f"Pay the current fine of Rs {self._current_fine:g} to borrow again.",
+            )
         overdue = [loan for loan in self._loans if loan.is_overdue(today)]
         if overdue:
-            # Checked separately from fines: the fine is only added on return,
-            # so an overdue item still out shows a balance of 0.
+            # Checked separately from fines: the fine is only charged on return,
+            # so an overdue item still out shows a current fine of 0.
             if len(overdue) == 1:
-                what = f'"{overdue[0].item.title}" is overdue. Please return it'
-            else:
-                what = f"{len(overdue)} items are overdue. Please return them"
-            raise OverdueLoans(f"{what} before borrowing more.")
+                title = overdue[0].item.title
+                raise OverdueLoans(f'"{title}" is overdue.',
+                                   next_step=f'Return "{title}" to borrow again.')
+            raise OverdueLoans(f"{len(overdue)} items are overdue.",
+                               next_step=f"Return the {len(overdue)} overdue items to borrow again.")
         if len(self._loans) >= self.get_borrow_limit():
             raise LimitExceeded(
                 f"{self.name} already has {len(self._loans)} of "
-                f"{self.get_borrow_limit()} allowed items."
+                f"{self.get_borrow_limit()} allowed items.",
+                next_step="Return an item to borrow another.",
             )
 
     def can_borrow(self, today: date | None = None) -> bool:
@@ -200,6 +221,14 @@ class Member(User):
         except LibraryException as e:
             return e.message
 
+    def borrow_next_step(self, today: date | None = None) -> str | None:
+        """What the member should do to borrow again, e.g. 'Return "X" to borrow again.'"""
+        try:
+            self.check_can_borrow(today)
+            return None
+        except LibraryException as e:
+            return e.next_step
+
     def has_loan_of(self, item_id: str) -> bool:
         """Return True if this member currently has this item on loan."""
         return any(loan.item.item_id == item_id for loan in self._loans)
@@ -208,7 +237,9 @@ class Member(User):
         """Account data plus the member's borrowing rules and current state."""
         data = super().to_dict()
         data.update(
-            fines=self._fines,
+            current_fine=self._current_fine,
+            accruing_fine=self.accruing_fine(),
+            total_fine=self.total_fine(),
             borrow_limit=self.get_borrow_limit(),
             loan_days=self.get_loan_days(),
             active_loans=len(self._loans),
@@ -216,6 +247,7 @@ class Member(User):
             loans_remaining=max(0, self.get_borrow_limit() - len(self._loans)),
             can_borrow=self.can_borrow(),
             borrow_block_reason=self.borrow_block_reason(),
+            borrow_next_step=self.borrow_next_step(),
             fine_policy=self.get_fine_policy().describe(),
             has_research_access=self.has_research_access(),
         )
@@ -239,19 +271,20 @@ class Member(User):
         """Move a loan from the active list to the history."""
         self._loans.remove(loan)
         self._history.append(loan)
+
     def add_fine(self, amount: float) -> None:
-        """Add an amount to the unpaid fine balance."""
+        """Charge a fine: it is added to the current fine."""
         if amount < 0:
             raise ValueError("Fine amount cannot be negative.")
-        self._fines += amount
+        self._current_fine += amount
 
     def pay_fine(self, amount: float) -> None:
-        """Pay off part or all of the unpaid fine balance."""
+        """Pay off part or all of the current fine."""
         if amount <= 0:
             raise ValueError("Payment must be positive.")
-        if amount > self._fines:
-            raise ValueError(f"Payment is more than the balance of {self._fines:.2f}.")
-        self._fines -= amount
+        if amount > self._current_fine:
+            raise ValueError(f"Payment is more than the current fine of Rs {self._current_fine:g}.")
+        self._current_fine -= amount
 
 
 class Student(Member):

@@ -36,7 +36,7 @@ function quickDesk(onChange) {
       } else {
         result.className = "small tone-good";
         result.textContent = `Returned "${loan.item_title}" from ${loan.member_name}` +
-          (loan.fine ? `. Fine added: ${formatMoney(loan.fine)}.` : ", on time.");
+          (loan.fine ? `. ${formatMoney(loan.fine)} added to the current fine.` : ", on time.");
         toast("Returned", `"${loan.item_title}" from ${loan.member_name}.`);
       }
       item.value = "";
@@ -77,7 +77,8 @@ async function load() {
       h("div", { class: "stats" },
         stat(String(stats.active_loans), "Items on loan"),
         stat(String(stats.overdue_loans), "Overdue", stats.overdue_loans ? "warn" : ""),
-        stat(formatMoney(stats.unpaid_fines), "Fines pending"),
+        stat(formatMoney(stats.current_fines), "Current fines, payable now"),
+        stat(formatMoney(stats.total_fines), "Total fines, with overdue items"),
         stat(String(stats.reservations), "Reservations waiting")),
       h("div", { class: "columns" },
         deskPanel,

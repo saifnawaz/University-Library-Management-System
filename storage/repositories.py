@@ -125,7 +125,7 @@ class UserRepository(Repository[User]):
             "role": obj.get_role(),
             "name": obj.name,
             "password_hash": obj.password_hash,  # the hash, never a plain password
-            "fines": obj.fines if isinstance(obj, Member) else 0.0,
+            "fines": obj.current_fine if isinstance(obj, Member) else 0.0,  # column holds the current fine
         }
 
     def _from_row(self, row: sqlite3.Row) -> User:

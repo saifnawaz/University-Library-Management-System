@@ -73,11 +73,14 @@ a:hover { color: var(--color-accent-ink); }
 main.page {
   display: flex;
   flex-direction: column;
-  gap: var(--space-6);
+  gap: var(--space-section);
   padding-top: var(--space-7);
-  padding-bottom: var(--space-8);
+  padding-bottom: calc(var(--space-8) * 1.5);
   animation: page-in var(--duration) var(--ease);
 }
+/* A heading block and the notice right under it stay close together */
+main.page > .page-head + .notice,
+main.page > .page-head + div > .notice:first-child { margin-top: calc(var(--space-5) - var(--space-section)); }
 main.page > :empty { display: none; }  /* empty slots (notices, forms) take no gap */
 @keyframes page-in {
   from { opacity: 0; transform: translateY(4px); }
@@ -96,11 +99,12 @@ main.page > :empty { display: none; }  /* empty slots (notices, forms) take no g
 
 .columns {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(min(100%, 340px), 1fr));
-  gap: var(--space-6);
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 380px), 1fr));
+  gap: var(--space-section) var(--space-8);
 }
 
-.section { display: flex; flex-direction: column; gap: var(--space-4); }
+.section { display: flex; flex-direction: column; gap: var(--space-5); }
+.section .section { gap: var(--space-4); }
 .section-head {
   display: flex;
   flex-wrap: wrap;
@@ -142,7 +146,7 @@ main.page > :empty { display: none; }  /* empty slots (notices, forms) take no g
 }
 .nav-links {
   display: flex;
-  gap: var(--space-1) 22px;
+  gap: var(--space-1) 28px;
   font-size: var(--text-base);
   order: 3;
   width: 100%;
@@ -314,8 +318,9 @@ select.input { padding-right: var(--space-7); }
 
 /* ---------- panels and notices ---------- */
 
+/* Boxes are only for things you act on (forms) */
 .panel {
-  padding: 22px;
+  padding: var(--space-6);
   background: var(--color-surface);
   border: var(--border-width) solid var(--color-border);
   border-radius: var(--radius);
@@ -324,16 +329,17 @@ select.input { padding-right: var(--space-7); }
   gap: var(--space-4);
 }
 
+/* Notice: a tinted band with a rule on the left; no box around it */
 .notice {
-  padding: 14px var(--space-4);
-  border: var(--border-width) solid;
-  border-left-width: 3px;
-  border-radius: var(--radius);
+  padding: var(--space-4) var(--space-5);
+  border-left: 3px solid;
   font-size: var(--text-base);
 }
 .notice strong { font-weight: 600; }
+.notice .next { display: block; margin-top: var(--space-1); font-weight: 600; }
 .notice.warn { background: var(--color-accent-tint); border-color: var(--color-accent-ink); }
 .notice.ok { background: var(--color-secondary-tint); border-color: var(--color-secondary-ink); }
+.notices { display: flex; flex-direction: column; gap: var(--space-3); }
 
 /* Dark panel: "Ask the librarian" */
 .dark-panel {
@@ -358,20 +364,27 @@ select.input { padding-right: var(--space-7); }
 
 /* ---------- stat strip ---------- */
 
+/* A quiet row of numbers between two hairlines */
 .stats {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(min(45%, 200px), 1fr));
-  border-top: var(--border-width) solid var(--color-border);
-  border-bottom: var(--border-width) solid var(--color-border);
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-5) var(--space-8);
+  padding: var(--space-5) 0;
+  border-top: var(--border-width) solid var(--color-divider);
+  border-bottom: var(--border-width) solid var(--color-divider);
 }
-.stat { padding: 20px 4px; }
+.stat { min-width: 140px; }
 .stat-value {
   font-family: var(--font-serif);
   font-size: var(--text-stat);
   line-height: 1.2;
 }
-.stat-value small { font-size: var(--text-lg); color: var(--color-muted); }
-.stat-label { font-size: var(--text-sm); color: var(--color-muted); }
+.stat-value small { font-size: var(--text-md); color: var(--color-muted); }
+.stat-label { font-size: var(--text-xs); color: var(--color-muted); margin-top: 2px; }
+@media (max-width: 520px) {
+  .stats { gap: var(--space-5); }
+  .stat { min-width: calc(50% - var(--space-5)); }
+}
 
 /* ---------- book covers ---------- */
 
@@ -415,13 +428,13 @@ select.input { padding-right: var(--space-7); }
 
 .book-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(min(46%, 190px), 1fr));
-  gap: var(--space-5);
+  grid-template-columns: repeat(auto-fill, minmax(min(46%, 200px), 1fr));
+  gap: var(--space-7) var(--space-5);
 }
 .picks {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
-  gap: 14px;
+  gap: var(--space-5);
 }
 .picks .book-meta { font-size: var(--text-xs); }
 @media (max-width: 520px) {
@@ -430,26 +443,34 @@ select.input { padding-right: var(--space-7); }
   .page-head > form.field { max-width: none !important; }
 }
 
-/* A row card: small cover, title and author, something on the right */
+/* A list row: small cover, title and author, something on the right.
+   No box: rows are separated by thin dividers. */
 .row-card {
   display: flex;
-  gap: var(--space-4);
+  gap: var(--space-5);
   align-items: center;
-  padding: 14px;
-  background: var(--color-surface);
-  border: var(--border-width) solid var(--color-border);
-  border-radius: var(--radius);
+  padding: var(--space-5) 0;
+  border-bottom: var(--border-width) solid var(--color-divider);
 }
-.row-card .grow { flex: 1; min-width: 0; }
+.row-card .grow { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
 .row-card .title { font-family: var(--font-serif); font-size: var(--text-md); overflow-wrap: anywhere; }
 .row-card .title a { text-decoration: none; }
 .row-card .sub { font-size: var(--text-sm); color: var(--color-muted); }
-.row-card .side { font-size: var(--text-sm); text-align: right; display: flex; flex-direction: column; gap: 6px; align-items: flex-end; }
+.row-card .side { font-size: var(--text-sm); text-align: right; display: flex; flex-direction: column; gap: var(--space-2); align-items: flex-end; }
 @media (max-width: 520px) {
-  .row-card { flex-wrap: wrap; }
-  .row-card .side { width: 100%; text-align: left; align-items: flex-start; padding-left: 56px; }
+  .row-card { flex-wrap: wrap; gap: var(--space-4); }
+  .row-card .side { width: 100%; text-align: left; align-items: flex-start; padding-left: 60px; }
 }
-.stack { display: flex; flex-direction: column; gap: var(--space-3); }
+.stack { display: flex; flex-direction: column; border-top: var(--border-width) solid var(--color-divider); }
+
+/* Fines: two figures side by side, then one muted line */
+.figures { display: flex; flex-wrap: wrap; gap: var(--space-5) var(--space-8); }
+.figure .stat-value { font-size: var(--text-2xl); }
+.figure .stat-label { font-size: var(--text-sm); max-width: 36ch; margin-top: var(--space-1); }
+.figure .stat-label strong { color: var(--color-text); font-weight: 600; }
+.rule-line { font-size: var(--text-sm); color: var(--color-muted); }
+.inline-form { display: flex; flex-wrap: wrap; gap: var(--space-3); align-items: flex-end; }
+.inline-form .field { flex: 0 1 220px; }
 
 /* ---------- catalog ---------- */
 
@@ -458,7 +479,7 @@ select.input { padding-right: var(--space-7); }
 .catalog-layout {
   display: flex;
   flex-wrap: wrap;
-  gap: 32px;
+  gap: var(--space-7) var(--space-8);
   align-items: flex-start;
 }
 .filters {
@@ -501,18 +522,20 @@ select.input { padding-right: var(--space-7); }
 .item-detail {
   display: grid;
   grid-template-columns: 1fr;
-  gap: var(--space-6);
+  gap: var(--space-7);
 }
 @media (min-width: 720px) {
-  .item-detail { grid-template-columns: 240px 1fr; }
+  .item-detail { grid-template-columns: 280px 1fr; gap: var(--space-8); }
 }
-.item-detail .cover { max-width: 240px; font-size: var(--text-xl); padding: 18px; }
-.item-detail .info { display: flex; flex-direction: column; gap: var(--space-4); }
+.item-detail .cover { max-width: 280px; font-size: var(--text-xl); padding: 20px; }
+.item-detail .info { display: flex; flex-direction: column; gap: var(--space-5); max-width: 70ch; }
 .facts {
   display: grid;
   grid-template-columns: max-content 1fr;
-  gap: var(--space-2) var(--space-5);
-  margin: 0;
+  gap: var(--space-3) var(--space-6);
+  margin: var(--space-3) 0 0;
+  padding-top: var(--space-5);
+  border-top: var(--border-width) solid var(--color-divider);
   font-size: var(--text-base);
 }
 .facts dt { color: var(--color-muted); }
@@ -522,32 +545,48 @@ select.input { padding-right: var(--space-7); }
 
 /* ---------- tables ---------- */
 
-.table-wrap {
-  overflow-x: auto;
-  border: var(--border-width) solid var(--color-border);
-  border-radius: var(--radius);
-  background: var(--color-surface);
-}
+/* Tables: no box, generous rows, thin dividers */
+.table-wrap { overflow-x: auto; }
 .table {
   width: 100%;
   border-collapse: collapse;
-  font-size: var(--text-sm);
-  min-width: 420px;
+  font-size: var(--text-base);
+  min-width: 520px;
 }
 .table th {
-  padding: 12px 14px;
+  padding: var(--space-3) var(--space-4);
   text-align: left;
+  font-size: var(--text-xs);
   font-weight: 600;
   color: var(--color-muted);
   border-bottom: var(--border-width) solid var(--color-border);
   white-space: nowrap;
 }
 .table td {
-  padding: 12px 14px;
+  padding: 18px var(--space-4);
   border-bottom: var(--border-width) solid var(--color-divider);
   vertical-align: middle;
 }
-.table tr:last-child td { border-bottom: none; }
+.table th:first-child, .table td:first-child { padding-left: 0; }
+.table th:last-child, .table td:last-child { padding-right: 0; }
+.table .sub { font-size: var(--text-xs); color: var(--color-muted); margin-top: 2px; }
+
+/* Phones: each row becomes a short stack of "Label: value" lines instead of scrolling sideways.
+   The labels come from the header (see labelledTable() in ui.js). */
+@media (max-width: 640px) {
+  .table, .table tbody, .table tr, .table td { display: block; min-width: 0; width: 100%; }
+  .table thead { display: none; }
+  .table tr { padding: var(--space-4) 0; border-bottom: var(--border-width) solid var(--color-divider); }
+  .table td, .table td:first-child, .table td:last-child, .table td.num { padding: 2px 0; border: none; text-align: left; }
+  .table td:first-child { font-weight: 600; margin-bottom: var(--space-1); }
+  .table td:first-child .sub { font-weight: 400; }
+  .table td[data-label]:not(:first-child):not(.actions)::before {
+    content: attr(data-label) ": ";
+    color: var(--color-muted);
+    font-weight: 400;
+  }
+  .table td.actions { margin-top: var(--space-3); }
+}
 .table .num { text-align: right; white-space: nowrap; }
 .table .nowrap { white-space: nowrap; }
 .table .late { color: var(--color-accent-ink); font-weight: 600; }
@@ -577,18 +616,15 @@ select.input { padding-right: var(--space-7); }
 
 /* ---------- loading, empty and error states ---------- */
 
-.state {
-  text-align: center;
-  padding: var(--space-7) var(--space-4);
-  background: var(--color-surface);
-  border: var(--border-width) dashed var(--color-border);
-  border-radius: var(--radius);
-}
+/* Empty and error states: plain text with space around it, no box */
+.state { padding: var(--space-7) 0; text-align: center; }
 .state h3 { margin-bottom: var(--space-2); font-size: var(--text-lg); }
-.state p { color: var(--color-muted); max-width: 46ch; margin: 0 auto; }
-.state .btn { margin-top: var(--space-4); }
-.state.error { border-style: solid; border-color: var(--color-accent-ink); }
-.state.compact { padding: var(--space-5) var(--space-4); }
+.state p { color: var(--color-muted); max-width: 48ch; margin: 0 auto; }
+.state .btn { margin-top: var(--space-5); }
+.state.compact { padding: var(--space-5) 0; text-align: left; border-bottom: var(--border-width) solid var(--color-divider); }
+.state.compact p { margin: 0; }
+.state.error { padding: var(--space-5) var(--space-5); text-align: left; border-left: 3px solid var(--color-accent-ink); background: var(--color-accent-tint); }
+.state.error p { margin: 0; }
 
 .skeleton {
   background: var(--color-disabled);

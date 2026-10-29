@@ -12,9 +12,14 @@ class LibraryException(Exception):
     default_message: str = "A library error occurred."
     http_status: int = 400  # Bad Request
 
-    def __init__(self, message: str | None = None) -> None:
-        """Use the given message, or the class's default message."""
+    def __init__(self, message: str | None = None, next_step: str | None = None) -> None:
+        """Use the given message, or the class's default message.
+
+        next_step optionally says what the user can do about it,
+        e.g. 'Return "Clean Code" to borrow again.'
+        """
         self.message: str = message or self.default_message
+        self.next_step: str | None = next_step
         super().__init__(self.message)
 
 

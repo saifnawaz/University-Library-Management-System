@@ -4,7 +4,9 @@
 import { api } from "./api.js";
 import { bookHandlers } from "./actions.js";
 import { itemForm } from "./item-form.js";
-import { h, boot, startPage, bookTile, plural, loadingState, emptyState, errorState } from "./ui.js";
+import {
+  h, boot, startPage, bookTile, blockedNotice, plural, loadingState, emptyState, errorState,
+} from "./ui.js";
 
 const TYPES = [
   ["book", "Books"], ["reference", "Reference books"], ["ebook", "E-books"],
@@ -65,10 +67,7 @@ function visibleItems() {
 // ---------- results ----------
 
 function renderNotice() {
-  const me = state.me;
-  noticeSlot.replaceChildren(me.can_manage_library || me.can_borrow ? "" :
-    h("div", { class: "notice warn", role: "status" },
-      h("strong", {}, "Borrowing is paused. "), me.borrow_block_reason));
+  noticeSlot.replaceChildren(state.me.can_manage_library ? "" : blockedNotice(state.me));
 }
 
 function renderResults() {

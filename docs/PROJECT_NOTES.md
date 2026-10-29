@@ -407,3 +407,32 @@ One section per phase, added as each phase is finished.
   - "See shelf location" and "Open e-book" aren't used.
   - "Forgot password?" says to ask at the circulation desk.
 - **Pages use `startPage("member" | "staff" | "any")`** so a librarian opening a member page (or the other way round) is sent to their own home page. The API still checks permissions on every request.
+
+---
+
+## Phase 7: fixes after testing
+
+### 1. Current fine vs total fine (worked out in Python)
+- **The problem:** the staff overview showed "Fines pending Rs 30" while the overdue table showed Rs 110 and Rs 25. Two different numbers carried the same name.
+- **The model now has three clear amounts**, in `Member` (`models/users.py`):
+  - **Current fine** (`current_fine` property): already charged when a late item came back, unpaid, and **payable now**. This was called `fines` before. The database column is still named `fines`, so old files load.
+  - **Accruing fine** (`accruing_fine()`): what the overdue items still out will add when they're returned. It's the sum of `loan.calculate_fine()` over current loans, so the Strategy pattern still decides the amounts.
+  - **Total fine** (`total_fine()`): current + accruing, i.e. what the member would owe if everything came back today.
+- **`Library.stats()` now reports `current_fines`, `accruing_fines` and `total_fines`.** Every page labels them the same way: "Current fine, payable now" and "Total fine, with overdue items". Overdue tables call their column "Adds on return", so it never looks like a third kind of fine.
+
+### 2. What to do next, after paying
+- **`LibraryException` takes an optional `next_step`:** a short sentence saying what the user can do about the problem. `Member.check_can_borrow()` fills it in for each rule:
+  - `UnpaidFines` → "Pay the current fine of Rs 30 to borrow again."
+  - `OverdueLoans` → 'Return "Introduction to Algorithms" to borrow again.'
+  - `LimitExceeded` → "Return an item to borrow another."
+- **Where it shows:** `Member.to_dict()` includes `borrow_next_step`, and the Flask error JSON includes `next_step`. Because of that, the paused notice, toasts and refused-borrow errors all show the next step.
+- **After paying:** the toast says "Fine paid. Return "Introduction to Algorithms" to borrow again.", and the page reloads, so the notice, figures and buttons change straight away.
+- **OOP concept:** extending the base exception once gives every subclass the new field (inheritance).
+
+### 3. Calmer layout
+- **Sizes:** content up to 1200px wide, body text 16px, nothing under 14px (a Playwright check measures every text element on every page), 48–64px between sections (`--space-section`).
+- **Fewer boxes:** list rows, rules, info panels, tables, empty states and notices have no borders. They use whitespace and thin dividers. Only forms you act on (Quick issue, Add an item, Issue to member) keep a box.
+- **Fewer things per screen:**
+  - **My loans** has three parts: On your desk; one Fines section (two figures, the pay form, the rules as one muted line); History.
+  - **Dashboard:** the stat strip hides zero values, and "Ready to borrow" only shows items the member can actually borrow. It disappears while borrowing is paused.
+- **Tables:** rows have 18px padding and dates never wrap. On phones, each row turns into "Label: value" lines. `h()` copies the column headers onto the cells (`labelledTable()`), so nothing scrolls sideways.

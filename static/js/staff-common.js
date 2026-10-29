@@ -1,21 +1,23 @@
 // Pieces shared by the librarian pages.
 
-import { h, formatMoney, plural, emptyState } from "./ui.js";
+import { h, formatDate, formatMoney, plural, emptyState } from "./ui.js";
 
-/** Overdue loans as a table: Member · role, item, days late, fine so far. */
+/** Overdue loans as a table. The fine column is what each loan adds when it comes back
+ *  (not yet charged), so it is labelled that way and never mixed up with current fines. */
 export function overdueTable(loans, { limit = null } = {}) {
   if (!loans.length) return emptyState("Nothing overdue", "Every loan is within its due date.");
   const rows = limit ? loans.slice(0, limit) : loans;
   return h("div", { class: "table-wrap" },
     h("table", { class: "table" },
       h("thead", {}, h("tr", {},
-        h("th", {}, "Member"), h("th", {}, "Item"), h("th", {}, "Days late"), h("th", { class: "num" }, "Fine"))),
+        h("th", {}, "Member"), h("th", {}, "Item"), h("th", {}, "Late by"),
+        h("th", { class: "num" }, "Adds on return"))),
       h("tbody", {}, rows.map((loan) => h("tr", {},
         h("td", {},
           h("a", { href: `/staff/desk?member=${encodeURIComponent(loan.member_id)}` }, loan.member_name),
-          ` · ${loan.member_role}`),
-        h("td", {}, loan.item_title),
-        h("td", { class: "late" }, String(loan.days_overdue)),
+          h("div", { class: "sub" }, loan.member_role)),
+        h("td", {}, loan.item_title, h("div", { class: "sub" }, `Due ${formatDate(loan.due_date)}`)),
+        h("td", { class: "late nowrap" }, plural(loan.days_overdue, "day")),
         h("td", { class: "num" }, formatMoney(loan.fine)))))));
 }
 
