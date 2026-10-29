@@ -3,7 +3,7 @@
 import { api } from "./api.js";
 import { bookHandlers } from "./actions.js";
 import {
-  h, boot, startPage, cover, stat, bookTile, dueText, formatMoney, todayLong,
+  h, boot, startPage, cover, stat, bookTile, dueText, formatDate, formatMoney, todayLong,
   blockedNotice, accruingText, loadingState, emptyState, errorState,
 } from "./ui.js";
 import { assistantPanel, MEMBER_ASSISTANT, withAssistant } from "./assistant.js";
@@ -32,7 +32,7 @@ function head() {
 function notices(reservations) {
   const ready = reservations.filter((r) => r.ready).map((r) =>
     h("div", { class: "notice ok" },
-      h("strong", {}, "Ready to collect. "),
+      h("strong", {}, `Ready to collect until ${formatDate(r.held_until)}. `),
       `A copy of "${r.item_title}" is being held for you at the desk.`));
   const list = [blockedNotice(me), ...ready].filter(Boolean);
   return list.length ? h("div", { class: "notices" }, list) : "";
@@ -42,15 +42,18 @@ function notices(reservations) {
 function statStrip(loans, reservations) {
   const overdue = loans.current.filter((l) => l.overdue).length;
   const dueThisWeek = loans.current.filter((l) => !l.overdue && l.days_left <= 7).length;
-  const bestPlace = reservations.length ? Math.min(...reservations.map((r) => r.position)) : null;
+  const ready = reservations.filter((r) => r.ready).length;
+  const waiting = reservations.filter((r) => !r.ready);
+  const bestPlace = waiting.length ? Math.min(...waiting.map((r) => r.position)) : null;
   const stats = [
     stat(h("span", {}, String(loans.current.length), h("small", {}, ` / ${me.borrow_limit}`)),
-      "Books borrowed"),
+      "Items on loan"),
   ];
   if (overdue) stats.push(stat(String(overdue), "Overdue", "warn"));
   else if (dueThisWeek) stats.push(stat(String(dueThisWeek), "Due this week"));
   if (me.current_fine > 0) stats.push(stat(formatMoney(me.current_fine), "Current fine, payable now", "warn"));
   if (me.total_fine > me.current_fine) stats.push(stat(formatMoney(me.total_fine), "Total fine, with overdue items"));
+  if (ready) stats.push(stat(String(ready), "Ready to collect"));
   if (bestPlace) stats.push(stat(`#${bestPlace}`, "On the waitlist"));
   return h("div", { class: "stats" }, stats);
 }

@@ -57,6 +57,7 @@ CREATE TABLE IF NOT EXISTS reservations (
     item_id    TEXT NOT NULL REFERENCES items(item_id),
     created_at TEXT NOT NULL,            -- ISO date-time
     notified   INTEGER NOT NULL DEFAULT 0,
+    held_until TEXT,                     -- ISO date: last day to collect a held copy
     PRIMARY KEY (user_id, item_id)
 );
 """
@@ -65,6 +66,7 @@ CREATE TABLE IF NOT EXISTS reservations (
 # A database file made before they existed gets them added when it is opened.
 ADDED_COLUMNS = [
     ("items", "withdrawn", "INTEGER NOT NULL DEFAULT 0"),
+    ("reservations", "held_until", "TEXT"),
 ]
 
 

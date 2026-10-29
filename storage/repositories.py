@@ -210,7 +210,7 @@ class ReservationRepository(Repository[Reservation]):
     """Saves reservations, including whether the member was told a copy is held."""
 
     TABLE = "reservations"
-    COLUMNS = ("user_id", "item_id", "created_at", "notified")
+    COLUMNS = ("user_id", "item_id", "created_at", "notified", "held_until")
     KEY_COLUMNS = ("user_id", "item_id")
     ORDER_BY = "created_at, user_id"  # waitlist order
 
@@ -227,6 +227,7 @@ class ReservationRepository(Repository[Reservation]):
             "item_id": obj.item.item_id,
             "created_at": obj.created_at.isoformat(),
             "notified": int(obj.notified),
+            "held_until": obj.held_until.isoformat() if obj.held_until else None,
         }
 
     def _from_row(self, row: sqlite3.Row) -> Reservation:
@@ -238,4 +239,5 @@ class ReservationRepository(Repository[Reservation]):
             self._items[row["item_id"]],
             datetime.fromisoformat(row["created_at"]),
             bool(row["notified"]),
+            date.fromisoformat(row["held_until"]) if row["held_until"] else None,
         )

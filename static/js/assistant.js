@@ -3,7 +3,7 @@
 // this only sends the question and draws the answer.
 
 import { api, ApiError } from "./api.js";
-import { h, busy } from "./ui.js";
+import { h, busy, toastError } from "./ui.js";
 
 const KEEP = 4; // exchanges kept on screen
 
@@ -11,7 +11,7 @@ export const MEMBER_ASSISTANT = {
   title: "Ask the librarian",
   endpoint: "/api/chat",
   answerer: "Librarian",
-  placeholder: "Is Deep Learning by Goodfellow available?",
+  placeholder: "Is Clean Code available?",
   suggestions: ["What's due soon?", "Do I owe any fines?", "What should I read next?"],
   note: "Answers come only from the library catalog and your own account. Library questions only.",
 };
@@ -51,14 +51,46 @@ export function assistantPanel({ title, endpoint, answerer, placeholder, suggest
   const suggestions = h("div", { class: "chat-suggestions" },
     starters.map((text) => h("button", { class: "btn btn-quiet btn-small", type: "button",
       onclick: () => ask(text) }, text)));
+  const newChat = h("button", { class: "btn btn-quiet btn-small", type: "button", hidden: true,
+    onclick: startOver }, "New chat");
+  let asked = false; // a question sent before the saved conversation arrived wins
+
+  function addExchange(question) {
+    const item = exchange(question, answerer);
+    log.append(item.el);
+    while (log.children.length > KEEP) log.firstElementChild.remove();
+    suggestions.hidden = true;
+    newChat.hidden = false;
+    return item;
+  }
+
+  // The session remembers the last few questions (Python keeps them); show them again after a reload.
+  api.get("/api/chat/history").then((turns) => {
+    if (asked) return;
+    for (const turn of turns) addExchange(turn.question).show(turn.answer);
+    scrollToEnd(log);
+  }).catch(() => {}); // nothing to show; asking still works
+
+  async function startOver() {
+    const restore = busy(newChat, "Clearing…");
+    try {
+      await api.del("/api/chat/history");
+      log.replaceChildren();
+      suggestions.hidden = false;
+      newChat.hidden = true;
+    } catch (error) {
+      toastError(error, "Couldn't start a new chat");
+    } finally {
+      restore();
+      input.focus();
+    }
+  }
 
   async function ask(text) {
     const question = text.trim();
     if (!question) { input.focus(); return; } // convenience only; Python checks too
-    suggestions.hidden = true;
-    const item = exchange(question, answerer);
-    log.append(item.el);
-    while (log.children.length > KEEP) log.firstElementChild.remove();
+    asked = true;
+    const item = addExchange(question);
     scrollToEnd(log);
     input.value = "";
     const restore = busy(send, "Asking…");
@@ -80,7 +112,7 @@ export function assistantPanel({ title, endpoint, answerer, placeholder, suggest
   const form = h("form", { class: "row", onsubmit: (e) => { e.preventDefault(); ask(input.value); } },
     h("label", { class: "visually-hidden", for: "ask-input" }, "Your question"), input, send);
   return h("section", { class: "dark-panel assistant", id: "ask", "aria-labelledby": "ask-title" },
-    h("h2", { id: "ask-title" }, title),
+    h("div", { class: "chat-head" }, h("h2", { id: "ask-title" }, title), newChat),
     log, suggestions, form,
     h("p", { class: "muted small chat-note" }, note));
 }

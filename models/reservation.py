@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -14,12 +14,14 @@ class Reservation:
     """A member waiting for an item. Earlier reservations come first in the waitlist."""
 
     def __init__(self, member: Member, item: LibraryItem,
-                 created_at: datetime | None = None, notified: bool = False) -> None:
-        """Create a reservation. Pass created_at and notified when loading saved data."""
+                 created_at: datetime | None = None, notified: bool = False,
+                 held_until: date | None = None) -> None:
+        """Create a reservation. Pass created_at, notified and held_until when loading saved data."""
         self._member: Member = member
         self._item: LibraryItem = item
         self._created_at: datetime = created_at or datetime.now()
         self._notified: bool = notified
+        self._held_until: date | None = held_until
 
     @property
     def member(self) -> Member:
@@ -41,9 +43,19 @@ class Reservation:
         """True once the member has been told a copy is held for them."""
         return self._notified
 
-    def mark_notified(self) -> None:
-        """Record that the member has been told a copy is held for them."""
+    @property
+    def held_until(self) -> date | None:
+        """Last day the member can collect the held copy (None while no copy is held)."""
+        return self._held_until
+
+    def hold_copy(self, until: date) -> None:
+        """Record that a copy is held for the member until the end of `until`."""
         self._notified = True
+        self._held_until = until
+
+    def is_hold_expired(self, today: date) -> bool:
+        """True once the last collection day has passed without the member borrowing it."""
+        return self._held_until is not None and today > self._held_until
 
     def to_dict(self) -> dict[str, Any]:
         """Reservation data for the web API."""
@@ -57,6 +69,7 @@ class Reservation:
             "item_type_key": self._item.TYPE_KEY,
             "created_at": self._created_at.isoformat(timespec="seconds"),
             "notified": self._notified,
+            "held_until": self._held_until.isoformat() if self._held_until else None,
         }
 
     def __lt__(self, other: object) -> bool:

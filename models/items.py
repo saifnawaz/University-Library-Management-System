@@ -153,6 +153,10 @@ class LibraryItem(ABC):
         """Borrowing restriction in words for the UI, or None if there is none."""
         return None
 
+    def is_lendable(self) -> bool:
+        """Return True if some member could ever take this item home (False: read in the library)."""
+        return True
+
     def is_available(self) -> bool:
         """Return True if at least one copy is free."""
         return self._available_copies > 0
@@ -260,6 +264,9 @@ class ReferenceBook(Book):
 
     def get_restriction_note(self) -> str | None:
         return "Read in library only"
+
+    def is_lendable(self) -> bool:
+        return False
 
 
 class EBook(LibraryItem):

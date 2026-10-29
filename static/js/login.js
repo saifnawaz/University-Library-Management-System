@@ -23,10 +23,11 @@ function showError(message) {
   errorBox.hidden = false;
 }
 
-// Already signed in? Skip the form.
-api.get("/api/me").then((user) => window.location.replace(homeFor(user))).catch(() => {
-  userIdInput.focus();
-});
+// Already signed in? Skip the form. (/api/session answers 200 either way, so no console error.)
+api.get("/api/session").then(({ user }) => {
+  if (user) window.location.replace(homeFor(user));
+  else userIdInput.focus();
+}).catch(() => userIdInput.focus());
 
 // ---------- demo mode ----------
 

@@ -143,7 +143,7 @@ function reservationsSection(member, reservations) {
             h("div", { class: "sub" }, `${r.item_id} · reserved ${formatDate(r.created_at)}`)),
           h("div", { class: "side" },
             h("span", { class: `status ${r.ready ? "tone-good" : "tone-muted"}` },
-              r.ready ? "Copy held at the desk" : `Number ${r.position} in line`),
+              r.ready ? `Copy held at the desk until ${formatDate(r.held_until)}` : `Number ${r.position} in line`),
             cancel));
       }));
   return h("section", { class: "section" }, h("h2", {}, "Reservations"), body);

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 from abc import ABC, abstractmethod
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Sequence
 
 from services.llm_client import LLMClient
 
@@ -18,8 +18,12 @@ class TopicGuard(ABC):
     """Answers one question: is this message a library question?"""
 
     @abstractmethod
-    def is_library_question(self, question: str) -> bool:
-        """True if the assistant may answer it; False means it gets the polite refusal."""
+    def is_library_question(self, question: str, earlier: Sequence[str] = ()) -> bool:
+        """True if the assistant may answer it; False means it gets the polite refusal.
+
+        earlier: the chat's previous library questions, oldest first, so a follow-up
+        such as "when is it due?" can be judged in context.
+        """
 
 
 class KeywordTopicGuard(TopicGuard):
@@ -38,6 +42,11 @@ class KeywordTopicGuard(TopicGuard):
         "item", "account",
     )  # not "hold" or "late": they would also match "holiday" and "latest"
     GREETINGS: frozenset[str] = frozenset({"hi", "hello", "hey", "thanks", "thank", "salam"})
+    # Words that point back to something said earlier ("who wrote it?", "and that one?")
+    FOLLOW_UP_WORDS: frozenset[str] = frozenset({
+        "it", "its", "it's", "that", "this", "those", "these", "them", "they", "one", "ones",
+    })
+    FOLLOW_UP_MAX_WORDS: int = 8
 
     def __init__(self, catalog_terms: Callable[[], Iterable[str]] | None = None,
                  extra_stems: Iterable[str] = ()) -> None:
@@ -46,14 +55,19 @@ class KeywordTopicGuard(TopicGuard):
         self._catalog_terms = catalog_terms
         self._stems: tuple[str, ...] = self.LIBRARY_STEMS + tuple(extra_stems)
 
-    def is_library_question(self, question: str) -> bool:
+    def is_library_question(self, question: str, earlier: Sequence[str] = ()) -> bool:
+        """A library word, a greeting, a catalog word, or (after a library question) a short
+        follow-up that points back to it. The system prompt still refuses anything else."""
         found = words(question)
         if any(w in self.GREETINGS for w in found):
             return True
         if any(w.startswith(self._stems) for w in found):
             return True
         catalog = set(self._catalog_terms()) if self._catalog_terms else set()
-        return any(w in catalog for w in found)
+        if any(w in catalog for w in found):
+            return True
+        return (bool(earlier) and len(found) <= self.FOLLOW_UP_MAX_WORDS
+                and any(w in self.FOLLOW_UP_WORDS for w in found))
 
 
 class LLMTopicGuard(TopicGuard):
@@ -85,8 +99,13 @@ class LLMTopicGuard(TopicGuard):
         self._prefilter: TopicGuard | None = prefilter
         self._prompt: str = self._PROMPT.format(topics=topics)
 
-    def is_library_question(self, question: str) -> bool:
-        if self._prefilter is not None and self._prefilter.is_library_question(question):
+    def is_library_question(self, question: str, earlier: Sequence[str] = ()) -> bool:
+        if self._prefilter is not None and self._prefilter.is_library_question(question, earlier):
             return True
-        verdict = self._client.generate(self._prompt, question)
+        message = question
+        if earlier:  # so "and the other one?" is sorted in context
+            message = ("Earlier messages in this chat:\n"
+                       + "\n".join(f"- {q}" for q in earlier)
+                       + f"\nNew message to sort:\n{question}")
+        verdict = self._client.generate(self._prompt, message)
         return verdict.strip().upper().startswith("LIBRARY")

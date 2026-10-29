@@ -35,6 +35,9 @@ a:hover { color: var(--color-accent-ink); }
   outline-offset: 2px;
 }
 
+/* The hidden attribute always wins (.btn and other display rules would otherwise show it) */
+[hidden] { display: none !important; }
+
 .visually-hidden {
   position: absolute !important;
   width: 1px; height: 1px;
@@ -173,7 +176,7 @@ main.page {
     padding: var(--space-6);
   }
   /* Title and note on top, the conversation scrolls, starters and the input at the bottom */
-  .assistant > h2 { order: -2; }
+  .assistant > .chat-head { order: -2; }
   .assistant > .chat-note { order: -1; }
   .assistant .chat-log,
   .assistant .chat-log:empty {
@@ -240,8 +243,7 @@ main.page {
   font-size: var(--text-base);
   order: 3;
   width: 100%;
-  overflow-x: auto;
-  scrollbar-width: none;
+  flex-wrap: wrap;  /* on a phone every link stays visible, on two lines if needed */
 }
 .nav-links a {
   text-decoration: none;
@@ -267,6 +269,7 @@ main.page {
 }
 @media (max-width: 520px) {
   .nav-user .who { display: none; }
+  .nav-links { column-gap: 20px; }
 }
 
 /* Librarian: dark bar so staff screens feel distinct */
@@ -479,6 +482,7 @@ select.input { padding-right: var(--space-7); }
 .chat-answer.error { color: var(--color-on-dark); border-left: 3px solid var(--color-accent-ink); padding-left: var(--space-3); }
 .chat-suggestions { display: flex; flex-wrap: wrap; gap: var(--space-2); }
 .chat-suggestions[hidden] { display: none; }
+.chat-head { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); }
 @media (prefers-reduced-motion: reduce) {
   .chat-answer.pending { animation: none; }
 }

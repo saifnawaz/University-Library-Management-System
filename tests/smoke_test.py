@@ -454,7 +454,7 @@ def test_return_notifies_next_in_line_and_holds_copy() -> None:
     lib.return_item(staff, "F1", "B1")
     assert len(s.notifications) == 1 and "held for you" in s.notifications[0]
     assert other.notifications == []                                # only the next person
-    assert lib.get_status_text("B1") == "Returned copies on hold · 2 waiting"
+    assert lib.get_status_text("B1") == "Returned copy on hold · 2 waiting"
     _expect(ItemNotAvailable, lib.issue, staff, "S2", "B1")          # held for S1, not S2
 
     lib.issue(staff, "S1", "B1")                                     # S1 collects it
@@ -1609,6 +1609,184 @@ def test_llm_topic_guard_flag_defaults_to_on() -> None:
             os.environ.pop("LLM_TOPIC_GUARD", None)
         else:
             os.environ["LLM_TOPIC_GUARD"] = old
+
+
+# ---------- Phase 10: held copies expire ----------
+
+def _held_library(start: date) -> tuple[Library, Librarian, Student, Faculty, Student]:
+    """B1 (one copy) borrowed by Ali on `start`; Dr. Khan, then Bilal, wait for it."""
+    lib, staff, s, f = _library()
+    s2 = Student("S2", "Bilal", User.hash_password("pw"))
+    lib.add_user(s2)
+    lib.issue(staff, "S1", "B1", today=start)
+    lib.reserve(staff, "F1", "B1", today=start)
+    lib.reserve(staff, "S2", "B1", today=start)
+    return lib, staff, s, f, s2
+
+
+def test_held_copy_waits_hold_days_then_passes_on() -> None:
+    day = date(2026, 10, 1)
+    lib, staff, s, f, s2 = _held_library(day)
+    lib.return_item(staff, "S1", "B1", today=day + timedelta(days=1))
+    held = lib.get_waitlist("B1")[0]
+    assert held.member is f and held.held_until == day + timedelta(days=4)  # 3 days by default
+    assert "until 5 Oct 2026" in f.notifications[-1]
+    assert lib.reservations_for(f, "F1")[0]["held_until"] == "2026-10-05"
+    assert lib.describe_item(lib.get_item("B1"), f)["actions"]["held_until"] == "2026-10-05"
+    assert lib.expire_holds(day + timedelta(days=4)) == []                  # last day: still held
+    expired = lib.expire_holds(day + timedelta(days=5))                     # the day after
+    assert [r.member for r in expired] == [f]
+    assert "ended on 5 Oct 2026" in f.notifications[-1]
+    assert lib.reservations_for(f, "F1") == []                              # left the waitlist
+    nxt = lib.get_waitlist("B1")[0]
+    assert nxt.member is s2 and nxt.held_until == day + timedelta(days=8)   # passed on, told
+    assert "until 9 Oct 2026" in s2.notifications[-1]
+    _expect(ItemNotAvailable, lib.issue, staff, "S1", "B1", today=day + timedelta(days=6))
+    # Nobody else waiting: after Bilal's hold ends the copy goes back on the shelf
+    lib.expire_holds(day + timedelta(days=9))
+    assert lib.get_waitlist("B1") == [] and lib.get_status_text("B1") == "1 of 1 available"
+    lib.issue(staff, "S1", "B1", today=day + timedelta(days=9))
+
+
+def test_actions_check_holds_first_and_hold_days_is_configurable() -> None:
+    day = date(2026, 10, 1)
+    lib, staff, s, f, s2 = _held_library(day)
+    lib.hold_days = 5
+    lib.return_item(staff, "S1", "B1", today=day)
+    assert lib.get_waitlist("B1")[0].held_until == day + timedelta(days=5)
+    # Issuing six days later ends Dr. Khan's hold first, so the copy is now Bilal's
+    _expect(ItemNotAvailable, lib.issue, staff, "F1", "B1", today=day + timedelta(days=6))
+    lib.issue(staff, "S2", "B1", today=day + timedelta(days=6))
+    for bad in (0, -1, 2.5, True):
+        _expect(ValueError, setattr, lib, "hold_days", bad)
+
+
+def test_hold_dates_are_saved_and_old_files_get_one() -> None:
+    day = date.today() - timedelta(days=1)
+    lib, staff, s, f, s2 = _held_library(day)
+    lib.return_item(staff, "S1", "B1", today=day)
+    with tempfile.TemporaryDirectory() as tmp:
+        db = Database(os.path.join(tmp, "holds.db"))
+        lib.save_to(db)
+        Library.reset()
+        again = Library()
+        again.load_from(db)
+        assert again.get_waitlist("B1")[0].held_until == day + timedelta(days=3)
+        # A file saved before held_until existed: the hold restarts from today
+        db.execute("UPDATE reservations SET held_until = NULL")
+        Library.reset()
+        old = Library()
+        old.load_from(db)
+        first = old.get_waitlist("B1")[0]
+        assert first.notified and first.held_until == date.today() + timedelta(days=3)
+        db.close()
+    Library.reset()
+
+
+def test_route_requests_end_expired_holds_and_save() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        path = os.path.join(tmp, "app.db")
+        lib, staff, s, f, s2 = _held_library(date.today() - timedelta(days=20))
+        lib.return_item(staff, "S1", "B1", today=date.today() - timedelta(days=10))  # held, expired
+        db = Database(path)
+        lib.save_to(db)
+        db.close()
+        Library.reset()
+        c = create_app(db_path=path, secret_key="test-secret", llm=FakeLLMClient()).test_client()
+        _login(c, "F1", "pw")
+        assert c.get("/api/me/reservations").get_json() == []
+        assert "without being collected" in c.get("/api/me/notifications").get_json()[-1]
+        db = Database(path)
+        rows = db.execute("SELECT user_id, held_until FROM reservations").fetchall()
+        db.close()
+        # Saved: Dr. Khan's hold ended, so the copy is now held for Bilal from today
+        assert [tuple(r) for r in rows] == [("S2", (date.today() + timedelta(days=3)).isoformat())]
+        Library.reset()
+
+
+# ---------- Phase 10: polish ----------
+
+def test_polish_labels_dates_and_session_check() -> None:
+    lib, staff, s, f = _library()
+    ref = lib.describe_item(lib.get_item("R1"), f)["actions"]
+    assert ref["unavailable_label"] == "Read in library only"   # not "Not available to faculty"
+    assert lib.describe_item(lib.get_item("T1"), s)["actions"]["unavailable_label"] == "Not available to students"
+    lib.issue(staff, "S1", "B1")
+    day = date.today() - timedelta(days=6)
+    assert lib.reserve(staff, "F1", "B1", today=day).created_at.date() == day  # seed dates stick
+    with _client() as c:
+        assert c.get("/api/session").get_json() == {"user": None}            # 200, not 401
+        _login(c, "S1")
+        assert c.get("/api/session").get_json()["user"]["user_id"] == "S1"
+
+
+# ---------- Phase 10: short chat memory ----------
+
+from services.chat_history import ChatHistory
+
+
+def test_chat_history_keeps_last_three_short_turns() -> None:
+    history = ChatHistory()
+    for n in range(1, 5):
+        history.add(f"Question {n}?", f"Answer {n}.")
+    assert len(history) == 3 and history.questions() == ["Question 2?", "Question 3?", "Question 4?"]
+    history.add("x" * 900, "y" * 900)
+    q, a = history.turns[-1]
+    assert len(q) == ChatHistory.MAX_CHARS and q.endswith("…") and len(a) == ChatHistory.MAX_CHARS
+    again = ChatHistory.from_list(history.to_list() + ["junk", {"question": 1}])
+    assert again.turns == history.turns
+    assert len(ChatHistory.from_list(None)) == 0 and len(ChatHistory.from_list("x")) == 0
+
+
+def test_follow_up_uses_memory_in_the_same_single_call() -> None:
+    lib, staff, s, f = _library()
+    fake = _guard_aware_fake("Clean Code is available.")
+    assistant = ChatAssistant.build(lib, fake, llm_guard=False)
+    history = ChatHistory()
+    assert assistant.ask(s, "Who wrote it?", history=history).kind == "refused"  # nothing to point to
+    assert fake.calls == [] and len(history) == 0                               # refusals not kept
+    assistant.ask(s, "Is Clean Code available?", history=history)
+    assert len(fake.calls) == 1 and len(history) == 1
+    reply = assistant.ask(s, "Who wrote it?", history=history)                  # follow-up
+    assert reply.kind == "answer" and len(fake.calls) == 2                      # one call each
+    system, message = fake.calls[-1]
+    assert "EARLIER IN THIS CHAT" in message and '"""Is Clean Code available?"""' in message
+    assert "Clean Code is available." in message
+    assert '"Clean Code" by Robert Martin' in message      # the earlier question found the item
+    assert "LIBRARY DATA is right" in system
+    assert message.index("EARLIER IN THIS CHAT") < message.index("MEMBER'S QUESTION")
+    assert len(history) == 2
+
+
+def test_llm_topic_guard_sorts_follow_ups_in_context() -> None:
+    fake = FakeLLMClient("LIBRARY")
+    guard = LLMTopicGuard(fake, prefilter=KeywordTopicGuard())
+    assert guard.is_library_question("And the other?", ["Is Clean Code in?"])
+    assert "Earlier messages in this chat" in fake.calls[0][1] and "Is Clean Code in?" in fake.calls[0][1]
+    keywords = KeywordTopicGuard()
+    assert not keywords.is_library_question("Who wrote it?")
+    assert keywords.is_library_question("Who wrote it?", ["Is Clean Code in?"])
+    assert not keywords.is_library_question("What's the weather today?", ["Is Clean Code in?"])
+
+
+def test_route_chat_memory_lives_in_the_session() -> None:
+    with _client() as c:
+        assert c.get("/api/chat/history").status_code == 401
+        _login(c, "S1")
+        assert c.get("/api/chat/history").get_json() == []
+        c.post("/api/chat", json={"question": "Is Clean Code available?"})
+        c.post("/api/chat", json={"question": "When is it due?"})
+        c.post("/api/chat", json={"question": "What's my GPA?"})                # refused: not kept
+        turns = c.get("/api/chat/history").get_json()
+        assert [t["question"] for t in turns] == ["Is Clean Code available?", "When is it due?"]
+        assert turns[0]["answer"] == "Fake answer from the test LLM."
+        assert c.delete("/api/chat/history").get_json() == {"ok": True}
+        assert c.get("/api/chat/history").get_json() == []
+        c.post("/api/chat", json={"question": "Any fines?"})
+        _login(c, "L1")                                     # a new login starts a new chat
+        assert c.get("/api/chat/history").get_json() == []
+        c.post("/api/staff/chat", json={"question": "Who is overdue?"})
+        assert len(c.get("/api/chat/history").get_json()) == 1
 
 
 # ---------- runner ----------

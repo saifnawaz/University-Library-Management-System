@@ -147,9 +147,12 @@ def populate(lib: Library) -> None:
     lib.return_item(staff, "stu02", "M001", today=days_ago(20))  # 3 days late: Rs 30 fine
     lib.issue(staff, "fac01", "M002", today=days_ago(12))        # due 5 days ago: overdue
     lib.issue(staff, "fac01", "B002", today=days_ago(10))        # last copy of B002
+    lib.issue(staff, "fac01", "B006", today=days_ago(9))         # the only copy of B006
+    lib.reserve(staff, "stu03", "B006", today=days_ago(7))
     lib.issue(staff, "fac01", "T001", today=days_ago(5))
     lib.issue(staff, "stu01", "B001", today=days_ago(4))
     lib.issue(staff, "stu01", "E001", today=days_ago(2))
+    lib.return_item(staff, "fac01", "B006", today=days_ago(1))   # now held for Zainab
 
     # Waitlist: both copies of B002 are out, so Ayesha joins the line.
     lib.reserve(staff, "stu01", "B002")
@@ -177,7 +180,8 @@ def main() -> None:
     print("  stu01  2 of 3 items on loan, waiting for 'Introduction to Algorithms'")
     print("  stu02  an overdue book and an unpaid Rs 30 fine, so borrowing is blocked")
     print("  fac01  a thesis on loan and an overdue magazine")
-    print("  stu03  a new member with no loans: 'Picked for you' shows the most borrowed items")
+    print("  stu03  a new member with no loans: 'Picked for you' shows the most borrowed items,")
+    print("         and a copy of 'Database System Concepts' is held for her to collect")
 
 
 if __name__ == "__main__":

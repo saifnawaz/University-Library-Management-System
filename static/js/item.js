@@ -30,7 +30,12 @@ function memberActions(item, loan) {
   const a = item.actions;
   const parts = [bookButton(item, bookHandlers(load))];
   if (loan) parts.push(h("span", { class: "muted" }, `You have this on loan · due ${formatDate(loan.due_date)}`));
-  if (a.queue_position) parts.push(h("span", { class: "muted" }, "We'll let you know when a copy is held for you."));
+  if (a.held_until) {
+    parts.push(h("span", { class: "status tone-good" },
+      `Ready to collect until ${formatDate(a.held_until)} · a copy is held for you at the desk`));
+  } else if (a.queue_position) {
+    parts.push(h("span", { class: "muted" }, `Number ${a.queue_position} in line. We'll let you know when a copy is held for you.`));
+  }
   if (!a.can_borrow && a.reason && !a.has_loan && !a.queue_position) {
     parts.push(h("span", { class: "muted" }, a.reason));
   }

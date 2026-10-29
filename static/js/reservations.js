@@ -29,7 +29,7 @@ function reservationRow(r) {
       h("div", { class: "sub" }, `${r.item_author} · reserved ${formatDate(r.created_at)}`)),
     h("div", { class: "side" },
       r.ready
-        ? h("span", { class: "status tone-good" }, "Ready to collect · held for you at the desk")
+        ? h("span", { class: "status tone-good" }, `Ready to collect until ${formatDate(r.held_until)} · held at the desk`)
         : h("span", { class: "status tone-muted" }, `Number ${r.position} in line`),
       cancel));
 }

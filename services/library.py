@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections import Counter
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from typing import Any
 
 from exceptions import (ItemNotAvailable, LibraryException, LimitExceeded, NotAuthenticated,
@@ -30,6 +30,7 @@ class Library:
 
     _instance: Library | None = None
     RECENT_DAYS: int = 30  # window for "most borrowed recently" on the staff dashboard
+    DEFAULT_HOLD_DAYS: int = 3  # days a returned copy waits for the first person in line
 
     def __new__(cls) -> Library:
         """Create the object the first time; afterwards return the same one."""
@@ -46,7 +47,19 @@ class Library:
         # Content and collaborative scores are combined; popularity fills in for new members.
         self._recommender: Recommender = Recommender(
             [ContentBasedStrategy(), CollaborativeStrategy()], fallback=PopularityStrategy())
+        self._hold_days: int = self.DEFAULT_HOLD_DAYS
         self._initialized: bool = True
+
+    @property
+    def hold_days(self) -> int:
+        """How many days a held copy waits to be collected (HOLD_DAYS in .env)."""
+        return self._hold_days
+
+    @hold_days.setter
+    def hold_days(self, days: int) -> None:
+        if not isinstance(days, int) or isinstance(days, bool) or days < 1:
+            raise ValueError("Hold days must be a whole number of at least 1.")
+        self._hold_days = days
 
     def _clear(self) -> None:
         """Empty all in-memory data."""
@@ -113,6 +126,9 @@ class Library:
             self._reservations.append(reservation)
             if not reservation.notified:
                 self._notifications.subscribe(reservation.item.item_id, reservation.member)
+            elif reservation.held_until is None:
+                # Saved before holds had an end date: the hold starts again today.
+                reservation.hold_copy(self._hold_end(date.today()))
 
     # ---- items and users ----
 
@@ -203,6 +219,7 @@ class Library:
         member = self._get_member(member_id)
         self._require_self_or_librarian(actor, member)
         item = self.get_item(item_id)
+        self.expire_holds(today)
         self._check_can_issue(member, item, today)
 
         # All checks passed: now change state.
@@ -217,7 +234,8 @@ class Library:
 
     def return_item(self, actor: User, member_id: str, item_id: str,
                     today: date | None = None) -> Loan:
-        """Take an item back, charge any fine, and tell the next waiting member."""
+        """Take an item back, charge any fine, and hold the copy for the next waiting member."""
+        today = today or date.today()
         member = self._get_member(member_id)
         self._require_self_or_librarian(actor, member)
         item = self.get_item(item_id)
@@ -225,45 +243,73 @@ class Library:
         if loan is None:
             raise NotFound(f'{member.name} does not have "{item.title}" on loan.')
 
+        self.expire_holds(today)
         loan.mark_returned(today)
         fine = loan.calculate_fine()
         if fine > 0:
             member.add_fine(fine)
         member.close_loan(loan)
         item.return_copy()
-        self._notify_held_copies(item)
+        self._notify_held_copies(item, today)
         return loan
 
     # ---- reservations ----
 
-    def reserve(self, actor: User, member_id: str, item_id: str) -> Reservation:
+    def reserve(self, actor: User, member_id: str, item_id: str,
+                today: date | None = None) -> Reservation:
         """Put a member on the waitlist for an item that has no free copy."""
         member = self._get_member(member_id)
         self._require_self_or_librarian(actor, member)
         item = self.get_item(item_id)
+        self.expire_holds(today)
         self._check_can_reserve(member, item)
 
-        reservation = Reservation(member, item)
+        # Stamped now; a given day (seed data) keeps the time but uses that date
+        now = datetime.now()
+        reservation = Reservation(member, item, datetime.combine(today, now.time()) if today else now)
         self._reservations.append(reservation)
         self._notifications.subscribe(item_id, member)
         return reservation
 
-    def cancel_reservation(self, actor: User, member_id: str, item_id: str) -> None:
+    def cancel_reservation(self, actor: User, member_id: str, item_id: str,
+                           today: date | None = None) -> None:
         """Cancel a reservation: the member's own, or anyone's if the actor is a librarian.
 
         If a returned copy was being held for this member, it passes to the next in line.
         """
+        today = today or date.today()
         member = self._get_member(member_id)
         self._require_self_or_librarian(actor, member)
         item = self.get_item(item_id)
+        self.expire_holds(today)
         if not any(r.member is member for r in self.get_waitlist(item_id)):
             raise NotFound(f'{member.name} has no reservation for "{item.title}".')
         self._remove_reservation(member, item)
-        self._notify_held_copies(item)
+        self._notify_held_copies(item, today)
 
     def get_waitlist(self, item_id: str) -> list[Reservation]:
         """Reservations for an item, first in line first."""
         return sorted(r for r in self._reservations if r.item.item_id == item_id)
+
+    def expire_holds(self, today: date | None = None) -> list[Reservation]:
+        """End holds whose last collection day has passed, and return them.
+
+        Each expired member is told and leaves the waitlist; the copy is then held for
+        the next person in line (who is told), or goes back on the shelf if nobody waits.
+        No background job: Library runs this at the start of issue, return, reserve and
+        cancel, and the web app runs it once per request.
+        """
+        today = today or date.today()
+        expired = [r for r in self._reservations if r.is_hold_expired(today)]
+        for reservation in expired:
+            reservation.member.receive_notification(
+                f'Your hold on "{reservation.item.title}" ended on '
+                f"{self._day(reservation.held_until)} without being collected, so your "
+                "reservation was closed. You can reserve it again from the catalog.")
+            self._remove_reservation(reservation.member, reservation.item)
+        for item in {r.item for r in expired}:
+            self._notify_held_copies(item, today)
+        return expired
 
     # ---- search and status ----
 
@@ -298,8 +344,10 @@ class Library:
             free = item.available_copies - waiting  # copies not held for the waitlist
             if free > 0:
                 parts.append(f"{free} of {item.total_copies} available")
-            elif item.available_copies > 0:
-                parts.append("Returned copies on hold")
+            elif item.available_copies == 1:
+                parts.append("Returned copy on hold")
+            elif item.available_copies > 1:
+                parts.append(f"{item.available_copies} returned copies on hold")
             else:
                 parts.append("All copies issued")
 
@@ -354,7 +402,7 @@ class Library:
             waitlist = self.get_waitlist(reservation.item.item_id)
             data = reservation.to_dict()
             data["position"] = waitlist.index(reservation) + 1
-            data["ready"] = reservation.notified  # a copy is held for them
+            data["ready"] = reservation.notified  # a copy is held for them, until held_until
             result.append(data)
         return result
 
@@ -464,12 +512,17 @@ class Library:
             can_reserve = True
         except LibraryException:
             can_reserve = False
-        waitlist = [r.member for r in self.get_waitlist(item.item_id)]
+        reservations = self.get_waitlist(item.item_id)
+        waitlist = [r.member for r in reservations]
+        own = next((r for r in reservations if r.member is member), None)
 
         # A short label for a disabled button, and the full reason in words.
         reason = borrow_error.message if borrow_error else None
         if borrow_error is None:
             label = None
+        elif not item.is_lendable():
+            label = item.get_restriction_note() or "Not available"  # nobody takes it home
+            reason = None
         elif not item.can_be_borrowed_by(member):
             label = f"Not available to {member.get_role_plural()}"
             reason = None  # the status text already says why ("Faculty borrowing only")
@@ -486,6 +539,8 @@ class Library:
             "unavailable_label": label,    # short text for a disabled button
             "has_loan": member.has_loan_of(item.item_id),
             "queue_position": waitlist.index(member) + 1 if member in waitlist else None,
+            # Last day to collect, if a copy is held for this member
+            "held_until": own.held_until.isoformat() if own and own.held_until else None,
         }
 
     @staticmethod
@@ -540,22 +595,33 @@ class Library:
             return f'The free copies of "{item.title}" are held for members on the waitlist.'
         return f'All copies of "{item.title}" are issued. You can reserve it.'
 
-    def _notify_held_copies(self, item: LibraryItem) -> None:
-        """Tell everyone a free copy is now held for, if they have not been told yet.
+    def _notify_held_copies(self, item: LibraryItem, today: date) -> None:
+        """Hold free copies for the people at the front of the line and tell them.
 
-        The first N people in line get the N free copies. NotificationCenter's
-        line holds only people not yet told, in waitlist order, so each notify()
-        reaches the next of them.
+        The first N people in line get the N free copies, each held for hold_days.
+        NotificationCenter's line holds only people not yet told, in waitlist order,
+        so each notify() reaches the next of them.
         """
         waitlist = self.get_waitlist(item.item_id)
         held_for = min(item.available_copies, len(waitlist))
+        until = self._hold_end(today)
         for reservation in waitlist[:held_for]:
             if not reservation.notified:
                 self._notifications.notify(
                     item.item_id,
-                    f'"{item.title}" is back and being held for you. Please collect it.',
+                    f'"{item.title}" is back and being held for you until {self._day(until)}. '
+                    "Please collect it from the desk by then.",
                 )
-                reservation.mark_notified()
+                reservation.hold_copy(until)
+
+    def _hold_end(self, today: date) -> date:
+        """Last day to collect a copy held from today."""
+        return today + timedelta(days=self._hold_days)
+
+    @staticmethod
+    def _day(d: date) -> str:
+        """A date in words for messages, e.g. '3 Nov 2026'."""
+        return f"{d.day} {d:%b %Y}"
 
     def _remove_reservation(self, member: Member, item: LibraryItem) -> None:
         """Drop the member's reservation for this item (if any) once they borrow it."""

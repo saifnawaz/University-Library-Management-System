@@ -20,6 +20,7 @@ from werkzeug.exceptions import HTTPException
 from exceptions import LibraryException, NotAuthenticated, NotFound
 from models.users import User
 from services.chat_assistant import ChatAssistant
+from services.chat_history import ChatHistory
 from services.staff_assistant import StaffAssistant
 from services.demo import DemoMode
 from services.library import Library
@@ -36,6 +37,17 @@ def env_flag(name: str, default: bool = False) -> bool:
     if not value:
         return default
     return value in ("1", "true", "yes", "on")
+
+
+def env_int(name: str, default: int) -> int:
+    """A whole number from the environment; unset or empty gives the default."""
+    value = os.getenv(name, "").strip()
+    if not value:
+        return default
+    try:
+        return int(value)
+    except ValueError:
+        raise RuntimeError(f"{name} in .env must be a whole number, not {value!r}.") from None
 
 
 def create_app(db_path: str | None = None, secret_key: str | None = None,
@@ -62,6 +74,7 @@ def create_app(db_path: str | None = None, secret_key: str | None = None,
     db = Database(db_path)
     db_file = db.path
     library = Library()
+    library.hold_days = env_int("HOLD_DAYS", Library.DEFAULT_HOLD_DAYS)
     library.load_from(db)
     db.close()
     write_lock = threading.Lock()  # one change + save at a time
@@ -100,16 +113,28 @@ def create_app(db_path: str | None = None, secret_key: str | None = None,
             raise ValueError(f"'{name}' is required.")
         return value.strip()
 
+    def save() -> None:
+        """Write the whole library to the database (call while holding write_lock)."""
+        save_db = Database(db_file)
+        try:
+            library.save_to(save_db)
+        finally:
+            save_db.close()
+
     def change(action: Callable[[], T]) -> T:
         """Run a change to the library, then save everything to the database."""
         with write_lock:
             result = action()
-            save_db = Database(db_file)
-            try:
-                library.save_to(save_db)
-            finally:
-                save_db.close()
+            save()
             return result
+
+    @app.before_request
+    def end_expired_holds() -> None:
+        """Before any API call, let Library end holds that ran out (saved only if any did)."""
+        if request.path.startswith("/api/"):
+            with write_lock:
+                if library.expire_holds():
+                    save()
 
     # ---- errors: always clean JSON, never a stack trace ----
 
@@ -192,6 +217,14 @@ def create_app(db_path: str | None = None, secret_key: str | None = None,
         session.clear()
         return jsonify(ok=True)
 
+    @app.get("/api/session")
+    def session_info() -> Response:
+        """Who is signed in, or user: null (the login page asks this without an error)."""
+        try:
+            return jsonify(user=current_user().to_dict())
+        except NotAuthenticated:
+            return jsonify(user=None)
+
     @app.get("/api/me")
     def me() -> Response:
         return jsonify(current_user().to_dict())
@@ -266,15 +299,34 @@ def create_app(db_path: str | None = None, secret_key: str | None = None,
         user = current_user()
         return jsonify(library.recommendations_for(user, user.user_id))
 
+    # ---- chat: the short memory lives in the session (signed cookie), never in the database ----
+
+    def ask(chat_assistant: ChatAssistant) -> Response:
+        user = current_user()
+        question = str(body().get("question") or "")
+        history = ChatHistory.from_list(session.get("chat_history"))
+        reply = chat_assistant.ask(user, question, history=history)
+        session["chat_history"] = history.to_list()
+        return jsonify(reply.to_dict())
+
     @app.post("/api/chat")
     def chat() -> Response:
-        question = str(body().get("question") or "")
-        return jsonify(assistant.ask(current_user(), question).to_dict())
+        return ask(assistant)
 
     @app.post("/api/staff/chat")
     def staff_chat() -> Response:
-        question = str(body().get("question") or "")
-        return jsonify(staff_assistant.ask(current_user(), question).to_dict())
+        return ask(staff_assistant)
+
+    @app.get("/api/chat/history")
+    def chat_history() -> Response:
+        current_user()
+        return jsonify(ChatHistory.from_list(session.get("chat_history")).to_list())
+
+    @app.delete("/api/chat/history")
+    def clear_chat_history() -> Response:
+        current_user()
+        session.pop("chat_history", None)
+        return jsonify(ok=True)
 
     @app.get("/api/me/notifications")
     def my_notifications() -> Response:

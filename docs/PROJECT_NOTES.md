@@ -7,11 +7,11 @@ One section per phase, added as each phase is finished.
 
 | Concept | Where |
 |---|---|
-| Encapsulation | `_underscore` attributes + `@property` everywhere; e.g. `User.name` setter, `LibraryItem.total_copies` setter, read-only `Member.loans` (returns a copy) |
+| Encapsulation | `_underscore` attributes + `@property` everywhere; e.g. `User.name` setter, `LibraryItem.total_copies` setter, read-only `Member.loans` (returns a copy), `Library.hold_days` setter (checks the value), `ChatHistory` (only `add()` changes it, and it enforces its own limits) |
 | Abstraction | `User`, `Member`, `LibraryItem`, `FinePolicy`, `RecommendationStrategy`, `LLMClient`, `TopicGuard` are ABCs with `@abstractmethod` |
 | Inheritance | `User → Member → Student/Faculty`, `User → Librarian`, `LibraryItem → Book → ReferenceBook`, `FinePolicy → StudentFinePolicy/FacultyFinePolicy`, `RecommendationStrategy → ContentBased/Collaborative/PopularityStrategy`, `LLMClient → GeminiClient/FakeLLMClient`, `TopicGuard → KeywordTopicGuard/LLMTopicGuard`, `ChatAssistant → StaffAssistant` |
 | Method overriding | `StaffAssistant` overrides `_check_asker()`, `_write_system_prompt()` and `_build_context()`, and the class constants `REFUSAL`, `FALLBACK`, `GUARD_STEMS`, `GUARD_TOPICS`; `ask()` is inherited unchanged |
-| Polymorphism | `item.can_be_borrowed_by(member)`, `member.get_fine_policy()`, `member.has_research_access()`, `user.can_manage_library()`, `item.get_loan_limit_days()`, `user.to_dict()` (Member adds its own fields), `exc.http_status` in the Flask error handler, `strategy.recommend(...)` in `Recommender`, `llm.generate(...)` and `guard.is_library_question(...)` in `ChatAssistant` |
+| Polymorphism | `item.can_be_borrowed_by(member)`, `member.get_fine_policy()`, `member.has_research_access()`, `user.can_manage_library()`, `item.get_loan_limit_days()`, `item.is_lendable()` (`ReferenceBook` says False), `user.to_dict()` (Member adds its own fields), `exc.http_status` in the Flask error handler, `strategy.recommend(...)` in `Recommender`, `llm.generate(...)` and `guard.is_library_question(...)` in `ChatAssistant` |
 | Operator overloading | `LibraryItem.__eq__`, `__hash__`, `__lt__`, `__str__`; `Reservation.__lt__` |
 | Custom exceptions | `exceptions.py`: `LibraryException` and its subclasses |
 | Singleton | `Library` (`services/library.py`) |
@@ -151,7 +151,7 @@ From the project root, with the venv:
 - **OOP concept:** Encapsulation and delegation (Loan passes the fine calculation to the policy object).
 
 ### `Reservation`
-- **What it does:** Stores member, item and `created_at`, all read-only, plus a `notified` flag that can only be switched on, through `mark_notified()`, once the member has been told a copy is held for them. The flag was added in Phase 5 so it can be saved. `__lt__` compares `created_at`, with `user_id` as a tie-breaker, so `sorted(reservations)` returns the waitlist with the earliest first.
+- **What it does:** Stores member, item and `created_at`, all read-only, plus a `notified` flag and a `held_until` date. Both are set together, only through `hold_copy(until)`, once a copy is held for the member. `is_hold_expired(today)` is True once the last collection day has passed. The flag was added in Phase 5 so it can be saved; `held_until` came in Phase 10, when held copies started to expire. `__lt__` compares `created_at`, with `user_id` as a tie-breaker, so `sorted(reservations)` returns the waitlist with the earliest first.
 - **OOP concept:** Encapsulation and operator overloading.
 
 ### Decisions
@@ -195,7 +195,7 @@ From the project root, with the venv:
 - **What it does:** A returned copy is held for the people in line, in order. Someone not on the waitlist gets `ItemNotAvailable`.
 
 ### `search()` and `get_status_text()`
-- **What they do:** `search()` requires every word to appear in the title, author or subject, ignoring case, and returns the results sorted by title. `get_status_text()` builds the status in words, e.g. "3 of 3 available", "Read in library only · 2 of 2 available", "All copies issued · 1 waiting", "Returned copies on hold · 2 waiting" or "Available online". E-books are recognised through `has_unlimited_copies()`, never by checking their type.
+- **What they do:** `search()` requires every word to appear in the title, author or subject, ignoring case, and returns the results sorted by title. `get_status_text()` builds the status in words, e.g. "3 of 3 available", "Read in library only · 2 of 2 available", "All copies issued · 1 waiting", "Returned copy on hold · 2 waiting" (or "2 returned copies on hold") or "Available online". E-books are recognised through `has_unlimited_copies()`, never by checking their type.
 
 ### Decisions
 - Issue, return and reserve can be done by a librarian for any member, or by a member for their own account. A student cannot act for someone else.
@@ -205,7 +205,7 @@ From the project root, with the venv:
 ### Added after Phase 4: `withdraw_item()` and `cancel_reservation()`
 - **`withdraw_item(actor, item_id)`:** A **soft delete**. Librarians only, and refused while any copy is on loan. The item isn't deleted: `item.withdraw()` sets a `withdrawn` flag, which hides it from `search()` and `all_items()` and blocks issuing and reserving it. Members' loan history still points to it. Anyone waiting for the item gets a message and their reservation is cancelled. (This first deleted the item and its history as `remove_item()`, and was changed to a soft delete before Phase 6 so history is kept.)
 - **`cancel_reservation(actor, member_id, item_id)`:** A member can cancel their own reservation, and a librarian can cancel anyone's. If a returned copy was being held for that member, it passes to the next person in line, and they're notified.
-- **`_notify_held_copies(item)`:** One helper used by both `return_item()` and `cancel_reservation()`. If there are N free copies, the first N people in line should each have been told. Anyone in that group whose reservation isn't `notified` yet gets a message.
+- **`_notify_held_copies(item, today)`:** One helper used by `return_item()`, `cancel_reservation()` and `expire_holds()`. If there are N free copies, the first N people in line should each have been told. Anyone in that group whose reservation isn't `notified` yet gets a message, and the copy is held for them for `hold_days` (Phase 10).
 
 ---
 
@@ -249,7 +249,7 @@ From the project root, with the venv:
 - **SQL injection:** table and column names come only from class constants, and values always go through `?` placeholders.
 - **Saves are full snapshots.** `save_to()` rewrites every table. That's simple and safe for a library of this size, and Phase 6 can call it after each change.
 - **`loan_id` is the first argument of `Loan(...)`, and `Library` assigns it.** That way the id exists before the loan is saved.
-- **`Reservation.notified` is stored**, so after a restart nobody is told twice and nobody is skipped.
+- **`Reservation.notified` is stored**, so after a restart nobody is told twice and nobody is skipped. Since Phase 10, `held_until` is stored too (a column added to older files by `ADDED_COLUMNS`).
 
 ---
 
@@ -403,7 +403,8 @@ From the project root, with the venv:
 
 ### Python additions so JS still decides no rules
 - **`actions.unavailable_label`:** the short text for a disabled button. Python picks it from which rule said no:
-  - the item's own restriction → `"Not available to students"`, using the new polymorphic `User.get_role_plural()`; `Faculty` overrides it to return "faculty"
+  - nobody can take the item home (`item.is_lendable()` is False, Phase 10) → its restriction, `"Read in library only"`
+  - the item's own restriction for this role → `"Not available to students"`, using the new polymorphic `User.get_role_plural()`; `Faculty` overrides it to return "faculty"
   - fines, overdue items or the limit → `"Borrowing paused"`
   - no free copy → `"Not available right now"`
 - **`Library.list_members()`:** librarians only.
@@ -506,7 +507,10 @@ From the project root, with the venv:
 
 ### Decisions
 - **Picking rules in Python, not JS:** the old dashboard chose its picks in JavaScript (borrowable items, theses first for Faculty). That was a library rule in JS, so it was removed. JS now only draws what the API returns.
-- **Still suggest items with no free copy:** a good match is still worth reading. The tile says "Join waitlist" instead of "Borrow".
+Phase 10: polish, then the README. This is the final phase, so do a
+full check at the end: all smoke tests, every page in the browser
+(light and dark, desktop and phone width) for every role, and one
+real Gemini call for each assistant.- **Still suggest items with no free copy:** a good match is still worth reading. The tile says "Join waitlist" instead of "Borrow".
 - **Fresh TF-IDF on each request:** the catalog is small (tens of items), so this takes milliseconds and always reflects new items. A big catalog would cache the vectors.
 - **Seed data:** older returned loans (fac01 and stu02) give overlapping histories, so stu01 sees "Members who borrowed..." reasons. New student `stu03` (Zainab Raza, `student123`) has no loans, so she sees the popular fallback.
 
@@ -545,7 +549,7 @@ From the project root, with the venv:
 - **OOP concept:** abstraction + polymorphism, the same idea as `FinePolicy`. **`LLMError` is deliberately not a `LibraryException`**, because users never see it.
 
 ### `TopicGuard` (abstract), `KeywordTopicGuard`, `LLMTopicGuard`
-- **`TopicGuard`:** one question, `is_library_question(question) -> bool`.
+- **`TopicGuard`:** one question, `is_library_question(question, earlier=()) -> bool`. (`earlier`, the chat's previous questions, was added in Phase 10 for follow-ups.)
 - **`KeywordTopicGuard`:** free and instant. A question is on topic if:
   - a word starts with a library stem ("borrow" covers borrowed/borrowing), or
   - it's a greeting, or
@@ -587,7 +591,7 @@ From the project root, with the venv:
 ### Decisions
 - **Keyword check before the LLM classifier:** most real questions contain a library word, so they cost one API call instead of two. That matters on Gemini's free tier.
 - **Fail closed on the guard:** if the classifier can't answer, the member gets "not available", not an answer that skipped the guard.
-- **Fresh context each question, no chat memory:** each question is answered from the current data alone. That's simpler, can't drift, and is enough for one-line library questions.
+- **Fresh context each question:** each question is answered from the current data. (Phase 10 added a short memory of the last 3 questions and answers for follow-ups; the facts still come only from the fresh data. See Phase 10.)
 - **Rate limit in memory:** fine for one server process. Several processes would need a shared store.
 - **A 429 is retried once on the backup model.** At first only 5xx errors were retried, on the idea that a used-up quota would just fail again. That's wrong for Gemini: the free-tier quota is counted *per model*, so when `gemini-3.5-flash` has used its 20 a day, `gemini-3.5-flash-lite` still has its own 20. The live check below hit exactly this case, and every answer came from the backup. It's still only one retry, never a loop: if the backup also fails, the user gets the fallback. A bad key or a bad request (other 4xx) is still not retried. `test_gemini_client_retries_backup_model_once` covers 503, 504 then 503, 429, 400 and 403.
 
@@ -638,3 +642,61 @@ Each answer took 1 to 2 seconds. `gemini-3.5-flash` had used up its daily quota 
 - **Subclass, not a flag:** an `is_staff` flag would put `if`s through every method. Overriding keeps each assistant's rules in its own class.
 - **Whole-library context, capped:** a few dozen members fit easily in one prompt, so the LLM counts and compares from real lists instead of us guessing which data a question needs. The caps keep a bigger library from sending huge prompts.
 - **Still read-only:** the assistant only reads `Library` data. Issuing, returning and payments stay on their own pages, where the rules are checked.
+
+## Phase 10: Polish, held copies expire, chat memory, README
+
+**Files:** `models/reservation.py`, `services/library.py`, `storage/database.py`, `storage/repositories.py` (held copies); `services/chat_history.py` (new), `services/chat_assistant.py`, `services/staff_assistant.py`, `services/topic_guard.py` (chat memory); `models/items.py` (`is_lendable()`); `app.py`; `seed.py`; `static/`; `README.md`; `HOLD_DAYS` in `.env.example`.
+
+### Held copies expire (`Reservation`, `Library`)
+- **The rule:** a returned copy is held for the first person in line for `HOLD_DAYS` days (default 3). After that it passes to the next person, who is told, or goes back on the shelf if nobody is waiting.
+- **`Reservation.hold_copy(until)` / `held_until` / `is_hold_expired(today)`:** the reservation knows its own last collection day. Expired means today is *after* that day, so the last day itself still counts.
+- **`Library.hold_days`:** a property with a setter that refuses anything but a whole number of at least 1. `app.py` sets it from `HOLD_DAYS` in `.env` through a small `env_int()` helper.
+- **`Library.expire_holds(today)`:** finds every expired hold. For each one, it tells the member ("Your hold on … ended on … without being collected") and takes them off the waitlist. Then it calls `_notify_held_copies(item, today)`, which holds the copy for the next person, or does nothing, so the copy is simply free again.
+- **When it runs, with no background job:**
+  - Inside `Library`, at the start of `issue()`, `return_item()`, `reserve()` and `cancel_reservation()`, so the rules are right even without Flask (tests, `seed.py`).
+  - In the web app, once per API request: a `before_request` hook calls `library.expire_holds()` and saves only if something expired. That covers simple page views too, so a member never sees a hold that has already ended.
+- **Shown to the member:** "Ready to collect until 1 Nov 2026" on the dashboard notice, the reservations page and the item page (`actions.held_until`). The notification says the date too. Librarians see "Copy held at the desk until …" on Issue & return, and both assistants get the date in their context.
+- **Saved:** a new `held_until` column (`ADDED_COLUMNS` adds it to older files). A hold saved before the column existed gets a fresh end date when it's loaded, counted from that day.
+- **Seed:** the only copy of "Database System Concepts" is returned yesterday and held for `stu03`, so the demo shows a held copy. `reserve()` now takes `today` like `issue()`, so seeded reservations get their story's date instead of today's.
+- **OOP concept:** encapsulation (the hold rules live in `Reservation` and `Library`, behind methods and a validated property) and the same Observer flow as before (`NotificationCenter` tells the next member).
+
+### Short chat memory (`ChatHistory`)
+- **What it does:** remembers the last 3 answered questions and answers of one chat, so follow-ups such as "when is it due?" work. Each text is cut to 500 characters. `add()` is the only way to change it, and it drops the oldest turn by itself. `to_list()` / `from_list()` turn it into plain data and back, and `from_list()` skips anything malformed.
+- **Where it lives:** in the Flask session (a signed cookie), never in the database, so it ends at logout. A new login also clears it. The 3-turn and 500-character limits keep the cookie well under the browser's 4 KB limit. The routes are still thin: read the history from the session, call `assistant.ask(user, question, history=history)`, write it back.
+- **Still one Gemini call per question:**
+  - The earlier turns go into the *same* prompt, in an "EARLIER IN THIS CHAT" block between LIBRARY DATA and the question.
+  - A new system prompt rule (`EARLIER_RULE`, shared by both assistants) says those turns are only for understanding follow-ups; facts come from LIBRARY DATA, and LIBRARY DATA wins if they disagree.
+  - Only real answers are remembered: refusals and fallbacks are not.
+- **Follow-ups find the right data:** the earlier questions are also used to look up catalog items (and, for staff, named members). So "Who wrote it?" after "Is Clean Code available?" still puts Clean Code in the context.
+- **Topic guards:** `is_library_question(question, earlier)`.
+  - `KeywordTopicGuard` accepts a short follow-up (at most 8 words) with a word like "it", "that" or "them", but only when there was an earlier library question in the chat.
+  - `LLMTopicGuard` shows the classifier the earlier questions.
+  - Trade-off: "is it raining?" right after a library question passes the keyword guard. The system prompt still refuses it, which is why it is a second layer.
+- **UI:** after a reload the panel shows the remembered turns again (`GET /api/chat/history`), and a "New chat" button clears them (`DELETE /api/chat/history`).
+- **OOP concept:** encapsulation (`ChatHistory` guards its own limits) and composition (the route passes the history in; the assistant doesn't know where it is kept).
+
+### Polish pass: what changed
+- **Reference books:** the button said "Not available to faculty" (or "…to students"), as if another role could borrow them. Items now have a polymorphic `is_lendable()` (`ReferenceBook` returns False), and the label is "Read in library only".
+- **Grammar:** "Returned copies on hold" with one copy now reads "Returned copy on hold" ("2 returned copies on hold" for more).
+- **"Keep it" button always visible:** the hidden "Keep it" next to "Withdraw from catalog" showed on every librarian item page, because `.btn` sets `display` and that overrides the `hidden` attribute. One global rule, `[hidden] { display: none !important; }`, fixes it and any other hidden button.
+- **Member dashboard:** "Books borrowed" became "Items on loan" (e-books and magazines count too). A held copy shows as "Ready to collect" instead of "#1 On the waitlist".
+- **Assistant placeholder:** it asked about "Deep Learning by Goodfellow", which isn't in the demo catalog, so it now asks "Is Clean Code available?".
+- **Phone navigation:** links that didn't fit scrolled sideways with no hint (the staff "Reports" link was off-screen). They now wrap onto a second line.
+- **Login page:** it checked "already signed in?" with `/api/me`, which logs a red 401 error in the browser console for every visitor. A new `GET /api/session` answers 200 with `user: null` instead.
+- **Item page while waiting:** it now says your place in line ("Number 2 in line. We'll let you know…"), or the collection date when a copy is held.
+
+### Final check
+- **Smoke tests:** 111 of 111 pass.
+- **Browser:** checked with Playwright and Chrome, on a fresh seeded database:
+  - every page for each demo account (stu01, stu02, stu03, fac01, lib01, and the sign-in page signed out), in light and dark, at 1440px and 390px wide
+  - no console errors, no failed API calls, no horizontal scrolling, no stray "undefined", "null" or "NaN" text
+  - the screenshots were reviewed by eye
+- **Live Gemini, one call per assistant, through the routes:**
+  - Member (`stu03`), "Is my reservation ready to collect, and until when?": "a copy of Database System Concepts is being held for you at the desk until 1 Nov 2026". Correct.
+  - Staff (`lib01`), "Which members have an overdue loan?": Bilal Ahmed (11 days) and Dr. Imran Malik (5 days). Correct.
+  - `gemini-3.5-flash` was out of daily quota (429), so both answers came from the lite backup, as designed.
+
+### Decisions
+- **Expire on use, not on a timer:** a background job would be one more moving part to start, stop and test. Checking at the start of each action and each request gives the same result for users, and tests can pass any `today`.
+- **The expired member leaves the waitlist:** keeping them first in line would block everyone behind them. They are told, and can reserve again.
+- **Memory in the session, small:** per-login, gone at logout, no database table, and no cross-user leaks. The limits are in `ChatHistory`, so the route can't store too much by mistake.
