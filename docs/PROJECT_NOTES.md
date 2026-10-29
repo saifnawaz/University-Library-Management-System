@@ -8,14 +8,14 @@ One section per phase, added as each phase is finished.
 | Concept | Where |
 |---|---|
 | Encapsulation | `_underscore` attributes + `@property` everywhere; e.g. `User.name` setter, `LibraryItem.total_copies` setter, read-only `Member.loans` (returns a copy) |
-| Abstraction | `User`, `Member`, `LibraryItem`, `FinePolicy` are ABCs with `@abstractmethod` |
-| Inheritance | `User → Member → Student/Faculty`, `User → Librarian`, `LibraryItem → Book → ReferenceBook`, `FinePolicy → StudentFinePolicy/FacultyFinePolicy` |
-| Polymorphism | `item.can_be_borrowed_by(member)`, `member.get_fine_policy()`, `member.has_research_access()`, `user.can_manage_library()`, `item.get_loan_limit_days()`, `user.to_dict()` (Member adds its own fields), `exc.http_status` in the Flask error handler |
+| Abstraction | `User`, `Member`, `LibraryItem`, `FinePolicy`, `RecommendationStrategy` are ABCs with `@abstractmethod` |
+| Inheritance | `User → Member → Student/Faculty`, `User → Librarian`, `LibraryItem → Book → ReferenceBook`, `FinePolicy → StudentFinePolicy/FacultyFinePolicy`, `RecommendationStrategy → ContentBased/Collaborative/PopularityStrategy` |
+| Polymorphism | `item.can_be_borrowed_by(member)`, `member.get_fine_policy()`, `member.has_research_access()`, `user.can_manage_library()`, `item.get_loan_limit_days()`, `user.to_dict()` (Member adds its own fields), `exc.http_status` in the Flask error handler, `strategy.recommend(...)` in `Recommender` |
 | Operator overloading | `LibraryItem.__eq__`, `__hash__`, `__lt__`, `__str__`; `Reservation.__lt__` |
 | Custom exceptions | `exceptions.py`: `LibraryException` and its subclasses |
 | Singleton | `Library` (`services/library.py`) |
 | Factory | `ItemFactory.create()` (`services/item_factory.py`) |
-| Strategy | `FinePolicy` and its subclasses (`services/fine_policy.py`) |
+| Strategy | `FinePolicy` and its subclasses (`services/fine_policy.py`); `RecommendationStrategy` and its subclasses, combined by `Recommender` (`services/recommender.py`) |
 | Observer | `NotificationCenter` (`services/notification_center.py`) + `Member.receive_notification()` |
 | Generics | `Repository(Generic[T])` (`storage/repositories.py`): one base class, used as `Repository[LibraryItem]`, `Repository[User]`, and so on |
 | Repository | `ItemRepository`, `UserRepository`, `LoanRepository`, `ReservationRepository`: the only classes that talk to the database |
@@ -36,6 +36,16 @@ One section per phase, added as each phase is finished.
 | class attribute (`BORROW_LIMIT = 3`) | `static const` member |
 | `class Repository(Generic[T])` | `template <typename T> class Repository` |
 | `with db.transaction():` | an RAII guard object: the setup runs on entry, the cleanup runs on exit even if an exception is thrown |
+| `@dataclass(frozen=True)` | a `struct` with a generated constructor and `const` fields |
+
+## Running the app
+
+From the project root, with the venv:
+
+1. `copy .env.example .env`, then set `FLASK_SECRET_KEY` (and `PORT` if 8765 is taken).
+2. `.venv\Scripts\python seed.py` loads the demo data (`--reset` replaces what's there).
+3. `.venv\Scripts\python app.py`, then open http://127.0.0.1:8765 (or the `PORT` you set).
+4. Tests: `.venv\Scripts\python -m tests.smoke_test`
 
 ---
 
@@ -305,7 +315,7 @@ One section per phase, added as each phase is finished.
 
 ## Seed data (`seed.py`)
 
-- **What it does:** Builds a demo library: 1 librarian, 2 students, 1 faculty member, 16 items across all five types, active, overdue and returned loans, a fine, and a waitlist. It then saves everything to the database and prints the demo logins.
+- **What it does:** Builds a demo library: 1 librarian, 3 students (one, `stu03`, with no loans yet), 1 faculty member, 16 items across all five types, active, overdue and returned loans (older returned ones give the recommender overlapping histories; see Phase 8), a fine, and a waitlist. It then saves everything to the database and prints the demo logins.
 - **Why it goes through `Library`:** It uses only normal `Library` methods (`create_item`, `issue`, `return_item`, `reserve`), with past dates passed as `today=`. That way the demo data obeys exactly the same rules as the app. For example, loans are issued in date order, so the overdue check sees the right day.
 - **Safety:** It refuses to touch a database that already has data unless you pass `--reset` (checked with `Database.is_empty()`).
 
@@ -442,3 +452,57 @@ One section per phase, added as each phase is finished.
 - **Fluid type with `clamp()`:** every `--text-*` token is `clamp(small, a + b·vw, large)`. It stays at the laptop size up to 1440px wide and grows to the large size at 1920px: body 16 → 18px, stat numbers 30 → 38px, h1 44 → 52px. The smallest size is 14 → 15px, so nothing goes under 14px. Headings also shrink on phones, so they use `max()` of two ramps.
 - **Staff overview:** Quick issue and the overdue table sit in a `.desk-columns` grid (`max-content` + `1fr`). Quick issue is only as wide as its form and the table gets the rest of the width. The result message uses `contain: inline-size`, so a long message wraps instead of widening the form.
 - **Staff assistant panel:** the staff overview ends with a dark "Staff assistant" panel, switched off and marked "Coming soon", the same as "Ask the librarian" on the member dashboard. Both are built by one helper, `assistantPanel()` in `ui.js`. In Phase 9 the staff one will be backed by **`StaffAssistant`, a subclass of `ChatAssistant`**. It inherits `ask()`, overrides `_system_prompt` and `_build_context()` with staff data (overdue loans, members, waitlists, reports), and only librarians can use it. That is inheritance plus polymorphism, the same way `Student`/`Faculty` override `Member`.
+
+### 5. Small fixes before Phase 8
+- **Reservations is a wide page too** (`class="wide"`), like My loans.
+- **Port from `.env`:** `python app.py` reads `PORT` (default 8765), because port 5000 is blocked on some Windows machines. `.env.example` lists it.
+
+---
+
+## Phase 8: Recommender (Strategy pattern)
+
+**Files:** `services/recommender.py` (new); `Library.recommendations_for()` in `services/library.py`; route `GET /api/me/recommendations` in `app.py`; "Picked for you" in `static/js/dashboard.js`; reason line in `bookTile()` (`static/js/ui.js`); older returned loans and a new member `stu03` in `seed.py`.
+
+### `Recommendation` (dataclass)
+- **What it does:** One suggestion: the `item`, its `score` and a `reason` in words ("Because you borrowed Clean Code").
+- **Why a dataclass:** It only holds three values. `@dataclass(frozen=True)` writes `__init__`, `__eq__` and `__repr__` for us, and `frozen` makes the fields read-only after creation, like `const` members in C++.
+
+### `RecommendationStrategy` (abstract)
+- **What it does:** One way of scoring items for a member. Abstract method `recommend(member, candidates, loans)` returns a list of `Recommendation`s. Each strategy has a `weight` (how much it counts when scores are combined, must be above 0).
+- **Shared code in the abstract class:** `borrowed_items(member)` (everything the member has borrowed, now or before) is a normal method every subclass uses. An ABC can have real methods, not only abstract ones.
+- **OOP concept:** Abstraction + the **Strategy pattern**. `Recommender` calls `strategy.recommend(...)` without knowing which kind it is (polymorphism).
+
+### `ContentBasedStrategy`
+- **What it does:** Finds items whose words are close to what the member borrowed.
+  1. Each item's text is its title, author, subject and description.
+  2. **TF-IDF** (scikit-learn's `TfidfVectorizer`) turns each text into a vector of word weights. A word counts more when it appears in this item and is rare across the rest of the catalog ("Python" counts for a lot, "the" is ignored).
+  3. **Cosine similarity** compares two vectors: 1 means the same words in the same proportions, 0 means no words in common.
+  4. Each candidate's score is its best similarity to any borrowed item, and that item names the reason: "Because you borrowed Learning Python". Candidates with score 0 are left out.
+
+### `CollaborativeStrategy`
+- **What it does:** "Members who borrowed X also borrowed Y." For each other member, take the items they share with me (X) and the items they have that I don't (Y), and count each pair. Y's score is how many such pairs it has. The X it shares most often names the reason: "Members who borrowed Clean Code also borrowed this".
+- It uses only loan records, not item text, so it can find links the words would miss (e.g. a magazine that algorithm students also read).
+
+### `PopularityStrategy`
+- **What it does:** Scores items by how many times they were borrowed in total. Reason: "Popular: borrowed 2 times". It needs no history, so it's the **fallback for new members**.
+
+### `Recommender`
+- **What it does:** Holds a list of strategies (plus an optional fallback) and combines them in `recommend(member, items, loans, reserved_ids, limit=3)`:
+  1. **Candidates** (`candidates()`): the rules for what may be suggested live here, in one place. Never an item the member has borrowed (current or returned), is on the waitlist for, a withdrawn item, or one they may not borrow (`item.can_be_borrowed_by(member)`, so no reference books, and theses only for Faculty).
+  2. Each strategy scores the candidates. Scores are scaled so that strategy's best item gets 1, then multiplied by its weight. This lets a similarity (0 to 1) and a count (1, 2, 3...) be added fairly.
+  3. The scores are added up per item and sorted, best first. Equal scores fall back to title order, using `LibraryItem.__lt__`. An item that both strategies like beats one only a single strategy likes.
+  4. The reason shown is the one from the strategy that added the most to that item's score.
+  5. If fewer than `limit` items were found, the fallback fills the rest. For a new member that's every slot.
+- `add_strategy()` adds another way of scoring without changing `Recommender` (open for extension).
+- **OOP concept:** Strategy pattern + composition (a Recommender *has* strategies, it isn't one).
+
+### How it's wired in
+- **`Library` owns one `Recommender`** (made in `__init__` with content + collaborative, and popularity as the fallback). `Library.recommendations_for(actor, member_id)` passes it the items, all loans and the member's reservations, then returns the usual item data (`describe_item()`) plus `reason`. Because it's the same item data as the catalog, the dashboard reuses the same tile and buttons (Borrow / Join waitlist / disabled with a reason).
+- **Route:** `GET /api/me/recommendations` (one line, no rules). A librarian gets 403 because they aren't a borrowing member.
+- **Dashboard:** "Picked for you" shows up to three tiles, each with its reason under the author. If there's nothing to suggest (no loans anywhere yet) it shows an empty state instead of a blank area.
+
+### Decisions
+- **Picking rules in Python, not JS:** the old dashboard chose its picks in JavaScript (borrowable items, theses first for Faculty). That was a library rule in JS, so it was removed. JS now only draws what the API returns.
+- **Still suggest items with no free copy:** a good match is still worth reading. The tile says "Join waitlist" instead of "Borrow".
+- **Fresh TF-IDF on each request:** the catalog is small (tens of items), so this takes milliseconds and always reflects new items. A big catalog would cache the vectors.
+- **Seed data:** older returned loans (fac01 and stu02) give overlapping histories, so stu01 sees "Members who borrowed..." reasons. New student `stu03` (Zainab Raza, `student123`) has no loans, so she sees the popular fallback.

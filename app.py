@@ -217,6 +217,11 @@ def create_app(db_path: str | None = None, secret_key: str | None = None) -> Fla
         user = current_user()
         return jsonify(library.reservations_for(user, user.user_id))
 
+    @app.get("/api/me/recommendations")
+    def my_recommendations() -> Response:
+        user = current_user()
+        return jsonify(library.recommendations_for(user, user.user_id))
+
     @app.get("/api/me/notifications")
     def my_notifications() -> Response:
         user = current_user()
@@ -276,4 +281,5 @@ def create_app(db_path: str | None = None, secret_key: str | None = None) -> Fla
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
-    create_app().run(debug=os.getenv("FLASK_DEBUG") == "1")
+    app = create_app()  # also loads .env, so PORT can come from there
+    app.run(port=int(os.getenv("PORT", "8765")), debug=os.getenv("FLASK_DEBUG") == "1")

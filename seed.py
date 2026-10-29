@@ -21,6 +21,7 @@ ACCOUNTS = [
     ("lib01", "Sara Qureshi", "librarian123", Librarian),
     ("stu01", "Ayesha Khan", "student123", Student),
     ("stu02", "Bilal Ahmed", "student123", Student),
+    ("stu03", "Zainab Raza", "student123", Student),   # new member: no loans yet
     ("fac01", "Dr. Imran Malik", "faculty123", Faculty),
 ]
 
@@ -118,6 +119,17 @@ def build_library() -> Library:
         lib.create_item(staff, data)
 
     # Loans, in date order (each issue is checked against the rules on that day).
+    # Older, returned loans first: they give the recommender borrowing histories
+    # that overlap ("members who borrowed X also borrowed Y").
+    lib.issue(staff, "fac01", "B005", today=days_ago(90))
+    lib.issue(staff, "fac01", "B001", today=days_ago(85))
+    lib.return_item(staff, "fac01", "B005", today=days_ago(70))
+    lib.issue(staff, "stu02", "B004", today=days_ago(70))
+    lib.issue(staff, "stu02", "E003", today=days_ago(68))
+    lib.return_item(staff, "fac01", "B001", today=days_ago(65))
+    lib.return_item(staff, "stu02", "E003", today=days_ago(62))
+    lib.return_item(staff, "stu02", "B004", today=days_ago(60))
+
     lib.issue(staff, "stu01", "B004", today=days_ago(40))
     lib.issue(staff, "stu02", "M001", today=days_ago(30))        # magazine: due in 7 days
     lib.return_item(staff, "stu01", "B004", today=days_ago(30))  # back on time
@@ -156,6 +168,7 @@ def main() -> None:
     print("  stu01  2 of 3 items on loan, waiting for 'Introduction to Algorithms'")
     print("  stu02  an overdue book and an unpaid Rs 30 fine, so borrowing is blocked")
     print("  fac01  a thesis on loan and an overdue magazine")
+    print("  stu03  a new member with no loans: 'Picked for you' shows the most borrowed items")
 
 
 if __name__ == "__main__":

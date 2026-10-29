@@ -139,6 +139,14 @@ Warm paper look, serif headings, book-spine colour blocks. Match the mockups in 
 - Never run `git commit` or `git push`. The author makes all commits; say when work is ready to commit.
 - Do not add Co-Authored-By or any Claude attribution to commit messages.
 
+## Running the app
+
+From the project root, with the venv's Python:
+
+- Copy `.env.example` to `.env` and set `FLASK_SECRET_KEY`. `PORT` is optional (default 8765; port 5000 is blocked on the author's machine).
+- `.venv\Scripts\python seed.py` loads demo data (`--reset` replaces existing data).
+- `.venv\Scripts\python app.py` starts the app at http://127.0.0.1:8765 (or the `PORT` from `.env`).
+
 ## Working style
 
 - The author is new to Python (comes from C/C++). After writing each class, explain briefly in simple language what it does and which OOP concept it shows. These explanations matter for the viva.

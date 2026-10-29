@@ -14,6 +14,8 @@ from models.reservation import Reservation
 from models.users import Member, User
 from services.item_factory import ItemFactory
 from services.notification_center import NotificationCenter
+from services.recommender import (CollaborativeStrategy, ContentBasedStrategy,
+                                  PopularityStrategy, Recommender)
 from storage.database import Database
 from storage.repositories import (ItemRepository, LoanRepository, ReservationRepository,
                                   UserRepository)
@@ -41,6 +43,9 @@ class Library:
         if self._initialized:
             return
         self._clear()
+        # Content and collaborative scores are combined; popularity fills in for new members.
+        self._recommender: Recommender = Recommender(
+            [ContentBasedStrategy(), CollaborativeStrategy()], fallback=PopularityStrategy())
         self._initialized: bool = True
 
     def _clear(self) -> None:
@@ -345,6 +350,19 @@ class Library:
             data["ready"] = reservation.notified  # a copy is held for them
             result.append(data)
         return result
+
+    def recommendations_for(self, actor: User, member_id: str,
+                            limit: int = 3) -> list[dict[str, Any]]:
+        """Suggested items for a member (their own, or anyone's for a librarian).
+
+        Each one is the usual item data plus a short reason, e.g.
+        "Because you borrowed Clean Code".
+        """
+        member = self.get_member(actor, member_id)
+        reserved = [r.item.item_id for r in self._reservations if r.member is member]
+        picks = self._recommender.recommend(
+            member, self._items.values(), self._loans, reserved, limit)
+        return [dict(self.describe_item(p.item, actor), reason=p.reason) for p in picks]
 
     def pay_fine(self, actor: User, member_id: str, amount: float) -> Member:
         """Record a fine payment for a member (their own, or anyone's for a librarian)."""

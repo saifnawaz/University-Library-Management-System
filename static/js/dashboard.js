@@ -76,25 +76,16 @@ function deskSection(loans) {
           h("a", { class: "btn btn-outline", href: "/catalog" }, "Browse the catalog")));
 }
 
-/**
- * Until the recommender exists (Phase 8), suggest up to three things this member can
- * borrow right now (the API's actions.can_borrow). Faculty see theses first.
- * Returns "" when there is nothing borrowable, e.g. while borrowing is paused.
- */
-function picksSection(items) {
-  const faculty = me.role === "Faculty";
-  const borrowable = items.filter((i) => i.actions.can_borrow);
-  const ordered = faculty
-    ? [...borrowable.filter((i) => i.type === "thesis"), ...borrowable.filter((i) => i.type !== "thesis")]
-    : borrowable;
-  const picks = ordered.slice(0, 3);
-  if (!picks.length) return "";
+/** Suggestions from the Recommender (Python), each with its reason, e.g. "Because you borrowed Clean Code". */
+function picksSection(picks) {
   return h("section", { class: "section" },
     h("div", { class: "section-head" },
-      h("h2", {}, faculty && picks[0].type === "thesis" ? "From the research collection" : "Ready to borrow"),
-      h("a", { href: faculty ? "/catalog?type=thesis" : "/catalog?available=1" }, "See more")),
-    h("div", { class: "picks" },
-      picks.map((item, i) => bookTile(item, bookHandlers(reload), i, { compact: true }))));
+      h("h2", {}, "Picked for you"),
+      h("a", { href: "/catalog" }, "Browse the catalog")),
+    picks.length
+      ? h("div", { class: "picks" },
+          picks.map((item, i) => bookTile(item, bookHandlers(reload), i, { compact: true })))
+      : emptyState("Nothing to suggest yet", "Once members start borrowing, suggestions will show up here."));
 }
 
 function askPanel() {
@@ -108,18 +99,18 @@ function askPanel() {
 // ---------- page ----------
 
 async function load() {
-  const [fresh, loans, reservations, items] = await Promise.all([
+  const [fresh, loans, reservations, picks] = await Promise.all([
     api.get("/api/me"),
     api.get("/api/me/loans"),
     api.get("/api/me/reservations"),
-    api.get("/api/items"),
+    api.get("/api/me/recommendations"),
   ]);
   me = fresh;
   main.replaceChildren(
     head(),
     notices(reservations),
     statStrip(loans, reservations),
-    h("div", { class: "columns" }, deskSection(loans), picksSection(items) || null),
+    h("div", { class: "columns" }, deskSection(loans), picksSection(picks)),
     askPanel());
   if (window.location.hash === "#ask") document.getElementById("ask").scrollIntoView();
 }

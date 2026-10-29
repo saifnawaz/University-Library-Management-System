@@ -1039,6 +1039,158 @@ def test_no_raw_colours_outside_tokens() -> None:
             assert not colour.search(text), f"raw colour in {path.relative_to(PROJECT_ROOT)}"
 
 
+# ---------- Phase 8: Recommender ----------
+
+from services.recommender import (CollaborativeStrategy, ContentBasedStrategy,
+                                  PopularityStrategy, Recommendation, RecommendationStrategy,
+                                  Recommender)
+
+
+def _rec_library() -> tuple[Library, Librarian, Student, Student, Faculty]:
+    """A library whose item texts overlap, for recommender tests."""
+    Library.reset()
+    lib = Library()
+    staff = Librarian("L1", "Sara", User.hash_password("pw"))
+    s1 = Student("S1", "Ali", User.hash_password("pw"))
+    s2 = Student("S2", "Bilal", User.hash_password("pw"))
+    f = Faculty("F1", "Dr. Khan", User.hash_password("pw"))
+    for u in (staff, s1, s2, f):
+        lib.add_user(u)
+    for data in (
+        {"type": "book", "item_id": "P1", "title": "Learning Python", "author": "Mark Lutz",
+         "year": 2013, "subject": "Python Programming",
+         "description": "Python language basics, functions and classes."},
+        {"type": "book", "item_id": "P2", "title": "Fluent Python", "author": "Luciano Ramalho",
+         "year": 2022, "subject": "Python Programming",
+         "description": "Idiomatic Python: classes, generators and data models."},
+        {"type": "book", "item_id": "G1", "title": "Garden Birds", "author": "Kate Moss",
+         "year": 2015, "subject": "Ornithology", "description": "Sparrows, robins and finches.", "total_copies": 3},
+        {"type": "book", "item_id": "C1", "title": "Cooking at Home", "author": "Raza Ali",
+         "year": 2019, "subject": "Cookery", "description": "Simple recipes for every day.", "total_copies": 3},
+        {"type": "reference", "item_id": "R1", "title": "Python Reference Manual",
+         "author": "PSF", "year": 2020, "subject": "Python Programming"},
+        {"type": "thesis", "item_id": "T1", "title": "Python Type Inference",
+         "author": "Omar", "year": 2024, "subject": "Python Programming", "supervisor": "Dr. R"},
+    ):
+        lib.add_item(staff, ItemFactory.create(data))
+    return lib, staff, s1, s2, f
+
+
+def _ids(recs: list[Recommendation]) -> list[str]:
+    return [r.item.item_id for r in recs]
+
+
+def test_content_based_finds_similar_text() -> None:
+    lib, staff, s1, *_ = _rec_library()
+    lib.issue(staff, "S1", "P1")
+    strategy = ContentBasedStrategy()
+    candidates = Recommender([]).candidates(s1, lib.all_items())
+    recs = strategy.recommend(s1, candidates, [])
+    best = max(recs, key=lambda r: r.score)
+    assert best.item.item_id == "P2"
+    assert best.reason == "Because you borrowed Learning Python"
+    assert "G1" not in _ids(recs)  # nothing in common: score 0, left out
+
+
+def test_collaborative_people_who_borrowed_x_also_borrowed_y() -> None:
+    lib, staff, s1, *_ = _rec_library()
+    lib.issue(staff, "S2", "G1")
+    lib.issue(staff, "S2", "C1")
+    lib.issue(staff, "S1", "G1")
+    loans = [l for m in (lib.get_user("S1"), lib.get_user("S2")) for l in m.loans]
+    candidates = Recommender([]).candidates(s1, lib.all_items())
+    recs = CollaborativeStrategy().recommend(s1, candidates, loans)
+    assert _ids(recs) == ["C1"]
+    assert recs[0].reason == "Members who borrowed Garden Birds also borrowed this"
+
+
+def test_recommender_never_suggests_excluded_items() -> None:
+    lib, staff, s1, s2, f = _rec_library()
+    lib.issue(staff, "S1", "P1")
+    lib.return_item(staff, "S1", "P1")      # returned loans count as "borrowed" too
+    lib.issue(staff, "S1", "G1")
+    lib.withdraw_item(staff, "C1")
+    candidates = Recommender([]).candidates(s1, lib._items.values(), reserved_ids=["P2"])
+    # P1, G1 borrowed; C1 withdrawn; R1 nobody can borrow; T1 Faculty only; P2 reserved
+    assert candidates == []
+    faculty_ids = {i.item_id for i in Recommender([]).candidates(f, lib._items.values())}
+    assert faculty_ids == {"P1", "P2", "G1", "T1"}  # Faculty may borrow the thesis
+
+
+def test_new_member_falls_back_to_most_borrowed() -> None:
+    lib, staff, s1, s2, f = _rec_library()
+    assert lib.recommendations_for(s1, "S1") == []  # no loans anywhere: nothing to say
+    lib.issue(staff, "S2", "G1")
+    lib.issue(staff, "F1", "G1")
+    lib.issue(staff, "F1", "C1")
+    picks = lib.recommendations_for(s1, "S1")
+    assert [p["item_id"] for p in picks] == ["G1", "C1"]
+    assert picks[0]["reason"] == "Popular: borrowed 2 times"
+    assert picks[1]["reason"] == "Popular: borrowed once"
+
+
+def test_recommender_combines_strategies_and_fills_with_fallback() -> None:
+    class Fixed(RecommendationStrategy):
+        """A test strategy that always scores the same items (polymorphism)."""
+        def __init__(self, scores: dict[str, float], weight: float = 1.0) -> None:
+            super().__init__(weight)
+            self._scores = scores
+
+        def recommend(self, member, candidates, loans):
+            return [Recommendation(c, self._scores[c.item_id], f"fixed {c.item_id}")
+                    for c in candidates if c.item_id in self._scores]
+
+    lib, staff, s1, *_ = _rec_library()
+    items = lib.all_items()
+    # P2 is liked by both strategies, so it beats G1 and C1, which only one strategy likes
+    rec = Recommender([Fixed({"G1": 4, "P2": 2}), Fixed({"C1": 9, "P2": 9}, weight=0.5)])
+    assert _ids(rec.recommend(s1, items, [], limit=3)) == ["P2", "G1", "C1"]
+    # The reason comes from the strategy that added most to the score
+    assert rec.recommend(s1, items, [], limit=1)[0].reason == "fixed P2"
+
+    lib.issue(staff, "S2", "P1")
+    rec = Recommender([Fixed({"G1": 1})], fallback=PopularityStrategy())
+    recs = rec.recommend(s1, items, lib.get_user("S2").loans, limit=2)
+    assert _ids(recs) == ["G1", "P1"] and recs[1].reason.startswith("Popular")
+
+    _expect(TypeError, RecommendationStrategy)  # abstract
+    _expect(ValueError, ContentBasedStrategy, weight=0)
+
+
+def test_library_recommendations_use_history() -> None:
+    lib, staff, s1, s2, f = _rec_library()
+    lib.issue(staff, "S1", "P1")
+    picks = lib.recommendations_for(s1, "S1")
+    assert picks[0]["item_id"] == "P2"
+    assert picks[0]["reason"] == "Because you borrowed Learning Python"
+    assert "actions" in picks[0]  # same item data as the catalog, for the same tile
+    assert all(p["item_id"] not in ("P1", "R1", "T1") for p in picks)
+    _expect(PermissionDenied, lib.recommendations_for, s2, "S1")  # someone else's
+
+
+def test_route_recommendations() -> None:
+    with _client() as c:
+        assert c.get("/api/me/recommendations").status_code == 401
+        _login(c, "S1")
+        c.post("/api/loans", json={"item_id": "B1"})
+        picks = c.get("/api/me/recommendations").get_json()
+        assert isinstance(picks, list)
+        for p in picks:
+            assert p["reason"] and p["item_id"] not in ("B1", "R1", "T1")
+        _login(c, "L1")
+        assert c.get("/api/me/recommendations").status_code == 403  # not a member
+
+
+def test_seed_recommendations() -> None:
+    import seed
+    lib = seed.build_library()
+    stu01, stu03 = lib.get_user("stu01"), lib.get_user("stu03")
+    picks = lib.recommendations_for(stu01, "stu01")
+    assert len(picks) == 3 and "B002" not in [p["item_id"] for p in picks]  # B002: reserved
+    assert any(p["reason"].startswith("Members who borrowed") for p in picks)
+    assert all(p["reason"].startswith("Popular") for p in lib.recommendations_for(stu03, "stu03"))
+
+
 # ---------- runner ----------
 
 def main() -> None:

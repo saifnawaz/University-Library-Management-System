@@ -255,13 +255,14 @@ export function bookButton(item, handlers) {
     a.unavailable_label || "Not available");
 }
 
-/** A book tile: cover (links to the item page), meta, status, one button. */
+/** A book tile: cover (links to the item page), meta, status, why it was suggested (if it was), one button. */
 export function bookTile(item, handlers, index = 0, { compact = false } = {}) {
   const href = `/catalog/${encodeURIComponent(item.item_id)}`;
   return h("article", { class: "book", style: { animationDelay: `${Math.min(index, 12) * 25}ms` } },
     cover(item.type, item.title, { href, size: compact ? "tiny" : "" }),
     h("div", { class: "book-meta" }, compact ? item.author : `${item.author} · ${item.item_type}`),
     compact ? null : h("div", { class: `status ${statusTone(item)}` }, item.status_text),
+    item.reason ? h("div", { class: "tag-line" }, item.reason) : null,
     bookButton(item, handlers));
 }
 
