@@ -81,9 +81,9 @@ main.page {
   animation: page-in var(--duration) var(--ease);
 }
 /* A heading block and the notice right under it stay close together */
-main.page > .page-head + .notice,
-main.page > .page-head + div > .notice:first-child { margin-top: calc(var(--space-5) - var(--space-section)); }
-main.page > :empty { display: none; }  /* empty slots (notices, forms) take no gap */
+:is(main.page, .page-flow) > .page-head + .notice,
+:is(main.page, .page-flow) > .page-head + div > .notice:first-child { margin-top: calc(var(--space-5) - var(--space-section)); }
+:is(main.page, .page-flow) > :empty { display: none; }  /* empty slots (notices, forms) take no gap */
 @keyframes page-in {
   from { opacity: 0; transform: translateY(4px); }
   to { opacity: 1; transform: none; }
@@ -114,6 +114,52 @@ main.page > :empty { display: none; }  /* empty slots (notices, forms) take no g
 }
 @media (min-width: 960px) {
   .desk-columns { grid-template-columns: max-content minmax(0, 1fr); }
+}
+/* Beside the assistant column the content is narrower: stack until it has room */
+@container page-flow (max-width: 879px) {
+  .desk-columns { grid-template-columns: 1fr; }
+}
+
+/* Pages with an assistant (member dashboard, staff overview): one column with the panel
+   last on narrow screens; from 1100px the panel is a sticky column on the right. */
+.with-assistant {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--space-section) var(--space-7);
+  align-items: start;
+}
+.page-flow {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-section);
+  min-width: 0;
+  container: page-flow / inline-size;
+}
+@media (min-width: 1100px) {
+  .with-assistant { grid-template-columns: minmax(0, 1fr) var(--assistant-width); }
+  .with-assistant > .assistant {
+    position: sticky;
+    top: var(--space-5);
+    height: calc(100vh - 2 * var(--space-5));
+    height: calc(100dvh - 2 * var(--space-5));
+    max-height: var(--assistant-max-height);
+  }
+  /* Title and note on top, the conversation scrolls, starters and the input at the bottom */
+  .assistant > h2 { order: -2; }
+  .assistant > .chat-note { order: -1; }
+  .assistant .chat-log,
+  .assistant .chat-log:empty {
+    display: flex;
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    padding-right: var(--space-2);
+    scrollbar-width: thin;
+    scrollbar-color: var(--color-dark-field-border) transparent;
+  }
+  .assistant form.row { flex-wrap: nowrap; }
+  .with-assistant > .assistant .input { flex: 1 1 0; min-width: 0; }  /* beats .dark-panel .input */
 }
 /* Issue and Return share one row; the result message wraps inside the form instead of widening it */
 .desk-columns .panel .row { flex-wrap: nowrap; }

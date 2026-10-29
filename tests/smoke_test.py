@@ -1582,6 +1582,35 @@ def test_route_staff_chat() -> None:
         assert r.get_json() == {"answer": StaffAssistant.REFUSAL, "kind": "refused"}
 
 
+def test_llm_topic_guard_can_be_switched_off() -> None:
+    lib, staff, s, f = _library()
+    for cls, asker in ((ChatAssistant, s), (StaffAssistant, staff)):
+        fake = _guard_aware_fake("An answer.")
+        assistant = cls.build(lib, fake, llm_guard=False)
+        assert isinstance(assistant._guard, KeywordTopicGuard)
+        assert assistant.ask(asker, "Who won the match?").kind == "refused"
+        assert fake.calls == []                       # refused by keywords, no LLM call
+        assert assistant.ask(asker, "Any overdue loans?").kind == "answer"
+        assert len(fake.calls) == 1                   # one call per question: the answer only
+        assert isinstance(cls.build(lib, fake)._guard, LLMTopicGuard)  # on by default
+
+
+def test_llm_topic_guard_flag_defaults_to_on() -> None:
+    from app import env_flag
+    old = os.environ.get("LLM_TOPIC_GUARD")
+    try:
+        for value, expected in (("", True), ("1", True), ("0", False), ("off", False)):
+            os.environ["LLM_TOPIC_GUARD"] = value
+            assert env_flag("LLM_TOPIC_GUARD", default=True) is expected, value
+        os.environ.pop("LLM_TOPIC_GUARD")
+        assert env_flag("LLM_TOPIC_GUARD", default=True) is True   # unset: on
+    finally:
+        if old is None:
+            os.environ.pop("LLM_TOPIC_GUARD", None)
+        else:
+            os.environ["LLM_TOPIC_GUARD"] = old
+
+
 # ---------- runner ----------
 
 def main() -> None:

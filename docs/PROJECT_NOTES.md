@@ -580,6 +580,7 @@ From the project root, with the venv:
 
 ### Wiring and UI
 - `ChatAssistant.build(library, llm)` (a `@classmethod`) builds the app's assistant. With a key it uses `LLMTopicGuard` (keyword check first); without one it uses `KeywordTopicGuard` alone, so off-topic questions are still refused properly. `create_app()` takes an optional `llm` (tests pass `FakeLLMClient`) and otherwise uses `GeminiClient.from_env()`. It logs a warning at startup if there's no key.
+- **`LLM_TOPIC_GUARD`** in `.env` (default on): `build(library, llm, llm_guard)` uses `LLMTopicGuard` only when it's on. With `LLM_TOPIC_GUARD=0` only `KeywordTopicGuard` runs, so every question makes at most one Gemini call (the answer). That saves quota, but a library question with no library word in it gets refused. `env_flag(name, default)` treats unset or empty as the default.
 - **Route:** `POST /api/chat {question}` → `{answer, kind}` (one line, no rules).
 - **"Ask the librarian" is on:** the conversation (last 4 exchanges) shows in the dark panel, with "Thinking…" while waiting. Three starter questions show until the first question. Errors such as the rate limit appear inline with their next step. The panel is built once, so the conversation survives a Borrow on the same page. The nav link `/dashboard#ask` scrolls to it and focuses the input.
 
@@ -618,7 +619,8 @@ From the project root, with the venv:
 ### Wiring and UI
 - `create_app()` builds both: `ChatAssistant.build(library, llm)` and `StaffAssistant.build(library, llm)`, sharing one `LLMClient`. Each has its own rate limiter (5 questions a minute per user).
 - **Route:** `POST /api/staff/chat {question}` → `{answer, kind}`. It's the same one line as `/api/chat`. The permission check lives in the class, not the route.
-- **Panel:** the staff overview's "Staff assistant" panel is now switched on. It's the same panel code as the member one (`panel()` in `assistant.js` with a different title, endpoint and starter questions).
+- **Panel:** the staff overview's "Staff assistant" panel is now switched on. It's the same panel code as the member one: `assistantPanel(STAFF_ASSISTANT)` instead of `assistantPanel(MEMBER_ASSISTANT)`, with a different title, endpoint and starter questions.
+- **Placement (both pages):** `withAssistant(panel, ...content)` wraps the page in `.with-assistant`. From 1100px wide, the panel is a sticky 380px column on the right (`--assistant-width`), the conversation scrolls inside it, and the input stays at the bottom. Narrower than that, the panel sits under the page content as before. A container query stacks the staff "Quick issue / Overdue" pair when the column beside the panel is too narrow for both. All of this is CSS layout only; no library rules moved to JS.
 
 ### Live check (real Gemini, through the route)
 Run on a throwaway copy of the seed data, signed in as `lib01`, on 30 Oct 2026:

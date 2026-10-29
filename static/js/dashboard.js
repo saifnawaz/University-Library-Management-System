@@ -6,7 +6,7 @@ import {
   h, boot, startPage, cover, stat, bookTile, dueText, formatMoney, todayLong,
   blockedNotice, accruingText, loadingState, emptyState, errorState,
 } from "./ui.js";
-import { chatPanel } from "./assistant.js";
+import { assistantPanel, MEMBER_ASSISTANT, withAssistant } from "./assistant.js";
 
 const main = document.getElementById("main");
 let me = null;
@@ -102,12 +102,12 @@ async function load() {
     api.get("/api/me/recommendations"),
   ]);
   me = fresh;
-  main.replaceChildren(
+  askPanel = askPanel || assistantPanel(MEMBER_ASSISTANT);
+  main.replaceChildren(withAssistant(askPanel,
     head(),
     notices(reservations),
     statStrip(loans, reservations),
-    h("div", { class: "columns" }, deskSection(loans), picksSection(picks)),
-    askPanel = askPanel || chatPanel());
+    h("div", { class: "columns" }, deskSection(loans), picksSection(picks))));
   if (window.location.hash === "#ask") {
     document.getElementById("ask").scrollIntoView();
     document.getElementById("ask-input").focus({ preventScroll: true });

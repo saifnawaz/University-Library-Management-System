@@ -29,21 +29,29 @@ from storage.database import PROJECT_ROOT, Database
 T = TypeVar("T")
 
 
-def env_flag(name: str) -> bool:
-    """True if the environment variable is set to 1, true, yes or on (any case)."""
-    return os.getenv(name, "").strip().lower() in ("1", "true", "yes", "on")
+def env_flag(name: str, default: bool = False) -> bool:
+    """True if the environment variable is set to 1, true, yes or on (any case).
+    Unset or empty gives the default."""
+    value = os.getenv(name, "").strip().lower()
+    if not value:
+        return default
+    return value in ("1", "true", "yes", "on")
 
 
 def create_app(db_path: str | None = None, secret_key: str | None = None,
-               demo_mode: bool | None = None, llm: LLMClient | None = None) -> Flask:
+               demo_mode: bool | None = None, llm: LLMClient | None = None,
+               llm_topic_guard: bool | None = None) -> Flask:
     """Build the Flask app and load the library from the database.
 
-    db_path, secret_key, demo_mode and the LLM client default to the values in .env;
-    tests pass their own (always a FakeLLMClient, so tests never call the internet).
+    db_path, secret_key, demo_mode, the LLM client and llm_topic_guard default to the
+    values in .env; tests pass their own (always a FakeLLMClient, so tests never call
+    the internet).
     """
     load_dotenv(PROJECT_ROOT / ".env")
     if demo_mode is None:
         demo_mode = env_flag("DEMO_MODE")
+    if llm_topic_guard is None:
+        llm_topic_guard = env_flag("LLM_TOPIC_GUARD", default=True)
     app = Flask(__name__, static_folder="static", static_url_path="/static")
     app.config["SECRET_KEY"] = secret_key or os.getenv("FLASK_SECRET_KEY")
     if not app.config["SECRET_KEY"]:
@@ -62,8 +70,8 @@ def create_app(db_path: str | None = None, secret_key: str | None = None,
     if llm is None:
         app.logger.warning("GEMINI_API_KEY is not set: the chat assistant will answer "
                            "with its 'not available' message.")
-    assistant = ChatAssistant.build(library, llm)
-    staff_assistant = StaffAssistant.build(library, llm)
+    assistant = ChatAssistant.build(library, llm, llm_topic_guard)
+    staff_assistant = StaffAssistant.build(library, llm, llm_topic_guard)
 
     # ---- helpers (request reading and saving only, no library rules) ----
 

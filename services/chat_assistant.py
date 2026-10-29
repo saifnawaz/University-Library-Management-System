@@ -74,15 +74,17 @@ class ChatAssistant:
         self._system_prompt: str = self._write_system_prompt()
 
     @classmethod
-    def build(cls, library: Library, llm: LLMClient | None) -> ChatAssistant:
+    def build(cls, library: Library, llm: LLMClient | None,
+              llm_guard: bool = True) -> ChatAssistant:
         """The assistant as the app uses it (cls is ChatAssistant or a subclass).
 
-        With an LLM: a keyword check first, then the LLM classifies anything the keywords
-        miss. Without one: the keyword guard alone, and on-topic questions get the fallback.
+        With an LLM and llm_guard: a keyword check first, then the LLM classifies anything
+        the keywords miss. Otherwise the keyword guard alone, so each question makes at most
+        one LLM call (and with no LLM, on-topic questions get the fallback).
         """
         keywords = KeywordTopicGuard(lambda: cls.catalog_terms(library), extra_stems=cls.GUARD_STEMS)
         guard: TopicGuard = (LLMTopicGuard(llm, prefilter=keywords, topics=cls.GUARD_TOPICS)
-                             if llm else keywords)
+                             if llm and llm_guard else keywords)
         return cls(library, llm, guard)
 
     # ---- public ----

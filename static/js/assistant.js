@@ -7,7 +7,7 @@ import { h, busy } from "./ui.js";
 
 const KEEP = 4; // exchanges kept on screen
 
-const MEMBER = {
+export const MEMBER_ASSISTANT = {
   title: "Ask the librarian",
   endpoint: "/api/chat",
   answerer: "Librarian",
@@ -16,7 +16,7 @@ const MEMBER = {
   note: "Answers come only from the library catalog and your own account. Library questions only.",
 };
 
-const STAFF = {
+export const STAFF_ASSISTANT = {
   title: "Staff assistant",
   endpoint: "/api/staff/chat",
   answerer: "Assistant",
@@ -42,7 +42,8 @@ function exchange(question, answerer) {
   };
 }
 
-function panel({ title, endpoint, answerer, placeholder, suggestions: starters, note }) {
+/** A chat panel (MEMBER_ASSISTANT or STAFF_ASSISTANT). Build it once and keep it between refreshes. */
+export function assistantPanel({ title, endpoint, answerer, placeholder, suggestions: starters, note }) {
   const input = h("input", { class: "input", id: "ask-input", type: "text", maxlength: "500",
     autocomplete: "off", placeholder });
   const send = h("button", { class: "btn btn-light", type: "submit" }, "Ask");
@@ -58,6 +59,7 @@ function panel({ title, endpoint, answerer, placeholder, suggestions: starters, 
     const item = exchange(question, answerer);
     log.append(item.el);
     while (log.children.length > KEEP) log.firstElementChild.remove();
+    scrollToEnd(log);
     input.value = "";
     const restore = busy(send, "Asking…");
     try {
@@ -69,6 +71,7 @@ function panel({ title, endpoint, answerer, placeholder, suggestions: starters, 
         : "Something went wrong. Please try again.";
       item.show(message, "error");
     } finally {
+      scrollToEnd(log);
       restore();
       input.focus();
     }
@@ -76,18 +79,23 @@ function panel({ title, endpoint, answerer, placeholder, suggestions: starters, 
 
   const form = h("form", { class: "row", onsubmit: (e) => { e.preventDefault(); ask(input.value); } },
     h("label", { class: "visually-hidden", for: "ask-input" }, "Your question"), input, send);
-  return h("section", { class: "dark-panel", id: "ask", "aria-labelledby": "ask-title" },
+  return h("section", { class: "dark-panel assistant", id: "ask", "aria-labelledby": "ask-title" },
     h("h2", { id: "ask-title" }, title),
     log, suggestions, form,
-    h("p", { class: "muted small" }, note));
+    h("p", { class: "muted small chat-note" }, note));
 }
 
-/** The member's "Ask the librarian" panel. */
-export function chatPanel() {
-  return panel(MEMBER);
+/** Show the newest exchange (only matters when the log scrolls, in the side column). */
+function scrollToEnd(log) {
+  log.scrollTop = log.scrollHeight;
 }
 
-/** The librarian's staff assistant panel (staff overview). */
-export function staffChatPanel() {
-  return panel(STAFF);
+/**
+ * The page layout with an assistant: the content, then the panel. CSS puts the panel in a
+ * sticky right-hand column on wide screens and keeps it at the bottom on narrow ones.
+ */
+export function withAssistant(panel, ...content) {
+  // Moving the kept panel into the new layout resets its scroll; go back to the newest answer.
+  requestAnimationFrame(() => scrollToEnd(panel.querySelector(".chat-log")));
+  return h("div", { class: "with-assistant" }, h("div", { class: "page-flow" }, ...content), panel);
 }

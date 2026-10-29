@@ -2,7 +2,7 @@
 // and the staff assistant.
 
 import { api, ApiError } from "./api.js";
-import { staffChatPanel } from "./assistant.js";
+import { assistantPanel, STAFF_ASSISTANT, withAssistant } from "./assistant.js";
 import { overdueTable, shelfChart } from "./staff-common.js";
 import {
   h, boot, startPage, stat, busy, toast, toastError, formatDate, formatMoney, todayLong,
@@ -74,8 +74,8 @@ async function load() {
       api.get("/api/reports/overdue"),
     ]);
     deskPanel = deskPanel || quickDesk(load);
-    askPanel = askPanel || staffChatPanel();
-    main.replaceChildren(
+    askPanel = askPanel || assistantPanel(STAFF_ASSISTANT);
+    main.replaceChildren(withAssistant(askPanel,
       h("div", { class: "page-head" },
         h("div", {}, h("p", { class: "eyebrow" }, todayLong()), h("h1", {}, "Today at the desk"))),
       h("div", { class: "stats" },
@@ -91,8 +91,7 @@ async function load() {
           overdueTable(overdue, { limit: 5 }))),
       h("section", { class: "section" },
         h("h2", {}, `Most borrowed, last ${stats.recent_days} days`),
-        shelfChart(stats.most_borrowed_recent.slice(0, 4))),
-      askPanel);
+        shelfChart(stats.most_borrowed_recent.slice(0, 4)))));
   } catch (error) {
     main.replaceChildren(errorState(error, load));
   }
