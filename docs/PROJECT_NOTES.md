@@ -9,7 +9,8 @@ One section per phase, added as each phase is finished.
 |---|---|
 | Encapsulation | `_underscore` attributes + `@property` everywhere; e.g. `User.name` setter, `LibraryItem.total_copies` setter, read-only `Member.loans` (returns a copy) |
 | Abstraction | `User`, `Member`, `LibraryItem`, `FinePolicy`, `RecommendationStrategy`, `LLMClient`, `TopicGuard` are ABCs with `@abstractmethod` |
-| Inheritance | `User → Member → Student/Faculty`, `User → Librarian`, `LibraryItem → Book → ReferenceBook`, `FinePolicy → StudentFinePolicy/FacultyFinePolicy`, `RecommendationStrategy → ContentBased/Collaborative/PopularityStrategy`, `LLMClient → GeminiClient/FakeLLMClient`, `TopicGuard → KeywordTopicGuard/LLMTopicGuard` |
+| Inheritance | `User → Member → Student/Faculty`, `User → Librarian`, `LibraryItem → Book → ReferenceBook`, `FinePolicy → StudentFinePolicy/FacultyFinePolicy`, `RecommendationStrategy → ContentBased/Collaborative/PopularityStrategy`, `LLMClient → GeminiClient/FakeLLMClient`, `TopicGuard → KeywordTopicGuard/LLMTopicGuard`, `ChatAssistant → StaffAssistant` |
+| Method overriding | `StaffAssistant` overrides `_check_asker()`, `_write_system_prompt()` and `_build_context()`, and the class constants `REFUSAL`, `FALLBACK`, `GUARD_STEMS`, `GUARD_TOPICS`; `ask()` is inherited unchanged |
 | Polymorphism | `item.can_be_borrowed_by(member)`, `member.get_fine_policy()`, `member.has_research_access()`, `user.can_manage_library()`, `item.get_loan_limit_days()`, `user.to_dict()` (Member adds its own fields), `exc.http_status` in the Flask error handler, `strategy.recommend(...)` in `Recommender`, `llm.generate(...)` and `guard.is_library_question(...)` in `ChatAssistant` |
 | Operator overloading | `LibraryItem.__eq__`, `__hash__`, `__lt__`, `__str__`; `Reservation.__lt__` |
 | Custom exceptions | `exceptions.py`: `LibraryException` and its subclasses |
@@ -556,7 +557,7 @@ From the project root, with the venv:
 
 ### `ChatAssistant`
 - **`ask(user, question)`, in order:**
-  1. **Who:** `Library.get_member()`, so a librarian gets `PermissionDenied` (StaffAssistant comes later).
+  1. **Who:** `_check_asker()`, which calls `Library.get_member()`, so a librarian gets `PermissionDenied`. (Librarians have their own `StaffAssistant`, below.)
   2. **Question:** empty or over 500 characters → `ValueError` (400).
   3. **Rate limit:** 5 questions a minute per member → `RateLimited` (429). Refused questions count too.
   4. **TopicGuard:** off-topic questions get the fixed `REFUSAL`, and no library data is sent anywhere.
@@ -578,7 +579,7 @@ From the project root, with the venv:
 - **OOP concept:** composition + dependency injection (the assistant *has* an `LLMClient`, a `TopicGuard` and a `RateLimiter`, all passed in) + encapsulation (`_system_prompt`, `_build_context()` are private).
 
 ### Wiring and UI
-- `build_assistant(library, llm)` builds the app's assistant. With a key it uses `LLMTopicGuard` (keyword check first); without one it uses `KeywordTopicGuard` alone, so off-topic questions are still refused properly. `create_app()` takes an optional `llm` (tests pass `FakeLLMClient`) and otherwise uses `GeminiClient.from_env()`. It logs a warning at startup if there's no key.
+- `ChatAssistant.build(library, llm)` (a `@classmethod`) builds the app's assistant. With a key it uses `LLMTopicGuard` (keyword check first); without one it uses `KeywordTopicGuard` alone, so off-topic questions are still refused properly. `create_app()` takes an optional `llm` (tests pass `FakeLLMClient`) and otherwise uses `GeminiClient.from_env()`. It logs a warning at startup if there's no key.
 - **Route:** `POST /api/chat {question}` → `{answer, kind}` (one line, no rules).
 - **"Ask the librarian" is on:** the conversation (last 4 exchanges) shows in the dark panel, with "Thinking…" while waiting. Three starter questions show until the first question. Errors such as the rate limit appear inline with their next step. The panel is built once, so the conversation survives a Borrow on the same page. The nav link `/dashboard#ask` scrolls to it and focuses the input.
 
@@ -587,3 +588,51 @@ From the project root, with the venv:
 - **Fail closed on the guard:** if the classifier can't answer, the member gets "not available", not an answer that skipped the guard.
 - **Fresh context each question, no chat memory:** each question is answered from the current data alone. That's simpler, can't drift, and is enough for one-line library questions.
 - **Rate limit in memory:** fine for one server process. Several processes would need a shared store.
+- **A 429 is retried once on the backup model.** At first only 5xx errors were retried, on the idea that a used-up quota would just fail again. That's wrong for Gemini: the free-tier quota is counted *per model*, so when `gemini-3.5-flash` has used its 20 a day, `gemini-3.5-flash-lite` still has its own 20. The live check below hit exactly this case, and every answer came from the backup. It's still only one retry, never a loop: if the backup also fails, the user gets the fallback. A bad key or a bad request (other 4xx) is still not retried. `test_gemini_client_retries_backup_model_once` covers 503, 504 then 503, 429, 400 and 403.
+
+## Phase 9 (part 2): StaffAssistant (librarian assistant)
+
+**Files:** `services/staff_assistant.py` (new); small changes to `services/chat_assistant.py` (the parts a subclass overrides) and `services/topic_guard.py` (extra stems and topics); route `POST /api/staff/chat` in `app.py`; `staffChatPanel()` in `static/js/assistant.js`, switched on in the staff overview (`static/js/staff.js`).
+
+### `StaffAssistant` (subclass of `ChatAssistant`)
+- **What it does:** answers a librarian's questions about running the library: who is overdue, who owes fines, which items have a waitlist, how many theses are on loan, what a named member has out, most borrowed items.
+- **What it inherits unchanged:** `ask()`. It runs in the same order (who, question, rate limit, TopicGuard, context, LLM, fallback), so the safety steps can't be skipped or copied wrong. It also inherits `build()`, `_message()`, `_tidy()`, `_find_items()` and `_rule_lines()`.
+- **What it overrides:**
+  - `_check_asker()`: only users whose `can_manage_library()` is True. Students and faculty get `PermissionDenied` ("for librarians only"). The member assistant still refuses librarians, so each class decides who may ask.
+  - `_write_system_prompt()`: staff rules. Use only LIBRARY DATA, never invent names, ids, numbers or amounts, count from the lists given, and never claim to change anything (point to Issue & return, Members or the catalog's staff tools).
+  - `_build_context()`: library-wide data, built field by field from `Library` methods:
+    - totals from `Library.stats()`
+    - overdue loans, most overdue first
+    - members with fines, largest first
+    - each waitlist in order
+    - every member account
+    - full details for up to 3 members the question names, by id or by name word
+    - matching catalog items
+    - each role's borrowing rules, asked from the member objects themselves (polymorphism)
+
+    Each list is capped at `MAX_LIST` (40) rows and says how many were left out.
+  - Class constants: its own `REFUSAL`, `FALLBACK`, `QUESTION_LABEL` ("LIBRARIAN'S QUESTION"), plus `GUARD_STEMS` ("member", "report", "stats", "issu"...) and `GUARD_TOPICS`, which `build()` passes to the topic guards. Without them, "How many students do we have?" would be refused.
+- **No secrets:** the context has names, ids, roles, loans and fines, never a password hash. A test checks every seed account against both the system prompt and the message.
+- **OOP concept:** inheritance + method overriding. This is the **Template Method** idea: the base class fixes the steps in `ask()`, and the subclass fills in the steps that differ. `ChatAssistant.build()` is a `@classmethod`, so `StaffAssistant.build()` builds a `StaffAssistant` with the staff topic words without writing a second factory.
+
+### Wiring and UI
+- `create_app()` builds both: `ChatAssistant.build(library, llm)` and `StaffAssistant.build(library, llm)`, sharing one `LLMClient`. Each has its own rate limiter (5 questions a minute per user).
+- **Route:** `POST /api/staff/chat {question}` → `{answer, kind}`. It's the same one line as `/api/chat`. The permission check lives in the class, not the route.
+- **Panel:** the staff overview's "Staff assistant" panel is now switched on. It's the same panel code as the member one (`panel()` in `assistant.js` with a different title, endpoint and starter questions).
+
+### Live check (real Gemini, through the route)
+Run on a throwaway copy of the seed data, signed in as `lib01`, on 30 Oct 2026:
+
+| Question | Reply |
+|---|---|
+| Who is more than 7 days overdue? | Bilal Ahmed (stu02), "Introduction to Algorithms", 11 days overdue. Correct: Dr. Malik's magazine is only 5 days overdue |
+| Which books have a waitlist? | "Introduction to Algorithms". Correct |
+| What does Ayesha have on loan? | Clean Code and the Python e-book. Correct, from the named-member details |
+| Who won the cricket match yesterday? | The staff refusal (`kind: refused`). The keywords missed, so the LLM classifier said OTHER |
+
+Each answer took 1 to 2 seconds. `gemini-3.5-flash` had used up its daily quota (429), so all four came from `gemini-3.5-flash-lite`, the backup model (see the 429 decision above).
+
+### Decisions
+- **Subclass, not a flag:** an `is_staff` flag would put `if`s through every method. Overriding keeps each assistant's rules in its own class.
+- **Whole-library context, capped:** a few dozen members fit easily in one prompt, so the LLM counts and compares from real lists instead of us guessing which data a question needs. The caps keep a bigger library from sending huge prompts.
+- **Still read-only:** the assistant only reads `Library` data. Issuing, returning and payments stay on their own pages, where the rules are checked.
