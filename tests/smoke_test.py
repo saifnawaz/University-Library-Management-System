@@ -1426,6 +1426,39 @@ def test_gemini_client_wraps_every_failure() -> None:
     assert client.generate("system", "hi") == "Clean Code is in."
 
 
+def test_gemini_client_retries_backup_model_once() -> None:
+    class ApiError(Exception):  # like google.genai.errors.APIError: has an HTTP .code
+        def __init__(self, code: int) -> None:
+            super().__init__(f"HTTP {code}")
+            self.code = code
+
+    class Script:  # stands in for client.models: fails or answers per model, records each call
+        def __init__(self, outcomes: dict[str, Any]) -> None:
+            self.models = self
+            self.outcomes = outcomes
+            self.asked: list[str] = []
+
+        def generate_content(self, model: str, **kwargs: Any) -> Any:
+            self.asked.append(model)
+            outcome = self.outcomes[model]
+            if isinstance(outcome, Exception):
+                raise outcome
+            return type("Response", (), {"text": outcome})()
+
+    main, backup = GeminiClient.DEFAULT_MODEL, GeminiClient.BACKUP_MODEL
+    client = GeminiClient("not-a-real-key")
+    client._client = Script({main: ApiError(503), backup: "From the backup."})
+    assert client.generate("system", "hi") == "From the backup."    # overloaded: one retry
+    assert client._client.asked == [main, backup]
+    client._client = Script({main: ApiError(504), backup: ApiError(503)})
+    _expect(LLMError, client.generate, "system", "hi")               # both busy: no third try
+    assert client._client.asked == [main, backup]
+    for code in (400, 403, 429):                                     # bad key/quota: no retry
+        client._client = Script({main: ApiError(code), backup: "unused"})
+        _expect(LLMError, client.generate, "system", "hi")
+        assert client._client.asked == [main]
+
+
 def test_route_chat() -> None:
     with _client() as c:
         assert c.post("/api/chat", json={"question": "Any fines?"}).status_code == 401

@@ -27,7 +27,9 @@ class LLMClient(ABC):
 class GeminiClient(LLMClient):
     """Calls Google Gemini through Google's official SDK (the google-genai package)."""
 
-    DEFAULT_MODEL: str = "gemini-3.8-flash"
+    # 3.5 Flash answers in a few seconds; 3.7/3.8 Flash often ran past the deadline (504).
+    DEFAULT_MODEL: str = "gemini-3.5-flash"
+    BACKUP_MODEL: str = "gemini-3.5-flash-lite"   # tried once if Google is overloaded (5xx)
     TIMEOUT_SECONDS: int = 20
     TEMPERATURE: float = 0.2      # low: stick to the facts we pass in
     MAX_OUTPUT_TOKENS: int = 2048
@@ -55,27 +57,51 @@ class GeminiClient(LLMClient):
 
     @property
     def model(self) -> str:
-        """The Gemini model name, e.g. 'gemini-3.8-flash'."""
+        """The Gemini model name, e.g. 'gemini-3.5-flash'."""
         return self._model
 
     def generate(self, system_prompt: str, message: str) -> str:
         try:
-            response = self._client.models.generate_content(
-                model=self._model,
-                contents=message,
-                config=self._types.GenerateContentConfig(
-                    system_instruction=system_prompt,
-                    temperature=self.TEMPERATURE,
-                    max_output_tokens=self.MAX_OUTPUT_TOKENS,
-                ),
-            )
-            text = (response.text or "").strip()
-        except Exception as e:  # network, quota, bad key, blocked reply: all mean "no answer"
-            log.warning("Gemini request failed: %s", type(e).__name__)
-            raise LLMError("The language model did not answer.") from e
+            text = self._ask(self._model, system_prompt, message)
+        except Exception as e:
+            if not self._is_server_error(e) or self._model == self.BACKUP_MODEL:
+                raise self._failed(e) from e
+            log.warning("Gemini %s busy (%s), trying %s", self._model, getattr(e, "code", ""),
+                        self.BACKUP_MODEL)
+            try:
+                text = self._ask(self.BACKUP_MODEL, system_prompt, message)
+            except Exception as e2:
+                raise self._failed(e2) from e2
         if not text:
             raise LLMError("The language model gave an empty answer.")
         return text
+
+    def _ask(self, model: str, system_prompt: str, message: str) -> str:
+        """One request to one model; returns the reply text (may be empty)."""
+        response = self._client.models.generate_content(
+            model=model,
+            contents=message,
+            config=self._types.GenerateContentConfig(
+                system_instruction=system_prompt,
+                temperature=self.TEMPERATURE,
+                max_output_tokens=self.MAX_OUTPUT_TOKENS,
+            ),
+        )
+        return (response.text or "").strip()
+
+    @staticmethod
+    def _is_server_error(e: Exception) -> bool:
+        """True for Google-side trouble (503 overloaded, 504 deadline) worth one retry.
+        Bad key, quota (429) or a bad request would fail again, so they are not retried."""
+        code = getattr(e, "code", None)
+        return isinstance(code, int) and code >= 500
+
+    @staticmethod
+    def _failed(e: Exception) -> LLMError:
+        """Log the failure without secrets and turn it into the LLMError callers expect."""
+        # type and HTTP status only (e.g. "ServerError 504"); never the message, which may echo the request
+        log.warning("Gemini request failed: %s %s", type(e).__name__, getattr(e, "code", ""))
+        return LLMError("The language model did not answer.")
 
 
 class FakeLLMClient(LLMClient):
