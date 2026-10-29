@@ -4,7 +4,7 @@ import { api } from "./api.js";
 import { bookHandlers } from "./actions.js";
 import {
   h, boot, startPage, cover, stat, bookTile, dueText, formatMoney, todayLong,
-  blockedNotice, accruingText, loadingState, emptyState, errorState,
+  blockedNotice, accruingText, assistantPanel, loadingState, emptyState, errorState,
 } from "./ui.js";
 
 const main = document.getElementById("main");
@@ -98,15 +98,11 @@ function picksSection(items) {
 }
 
 function askPanel() {
-  return h("section", { class: "dark-panel", id: "ask", "aria-labelledby": "ask-title" },
-    h("h2", { id: "ask-title" }, "Ask the librarian"),
-    h("form", { class: "row", onsubmit: (e) => e.preventDefault() },
-      h("label", { class: "visually-hidden", for: "ask-input" }, "Message"),
-      h("input", { class: "input", id: "ask-input", type: "text", disabled: true,
-                   placeholder: "Is Deep Learning by Goodfellow available?" }),
-      h("button", { class: "btn btn-light", type: "submit", disabled: true }, "Ask")),
-    h("p", { class: "muted small" },
-      "Coming soon: ask about availability, your loans, fines and what to read next."));
+  return assistantPanel({
+    title: "Ask the librarian",
+    placeholder: "Is Deep Learning by Goodfellow available?",
+    comingSoon: "ask about availability, your loans, fines and what to read next.",
+  });
 }
 
 // ---------- page ----------

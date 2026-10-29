@@ -337,6 +337,20 @@ export function paymentToast(member, { forStaff = false } = {}) {
   toast(forStaff ? "Payment recorded" : "Fine paid", left + next);
 }
 
+/**
+ * The dark "ask" panel, switched off until the chat assistant exists (Phase 9).
+ * Members get ChatAssistant and staff get StaffAssistant; both share this panel.
+ */
+export function assistantPanel({ title, placeholder, comingSoon }) {
+  return h("section", { class: "dark-panel", id: "ask", "aria-labelledby": "ask-title" },
+    h("h2", { id: "ask-title" }, title),
+    h("form", { class: "row", onsubmit: (e) => e.preventDefault() },
+      h("label", { class: "visually-hidden", for: "ask-input" }, "Message"),
+      h("input", { class: "input", id: "ask-input", type: "text", disabled: true, placeholder }),
+      h("button", { class: "btn btn-light", type: "submit", disabled: true }, "Ask")),
+    h("p", { class: "muted small" }, `Coming soon: ${comingSoon}`));
+}
+
 /** How an overdue loan's fine reads before it is charged. */
 export function accruingText(loan) {
   return `adds ${formatMoney(loan.fine)} when returned`;

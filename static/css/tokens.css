@@ -48,17 +48,20 @@
   /* ---- type ---- */
   --font-serif: "Fraunces", Georgia, "Times New Roman", serif;
   --font-sans: "Source Sans 3", system-ui, -apple-system, "Segoe UI", sans-serif;
-  /* Nothing smaller than 14px anywhere */
-  --text-xs: 14px;
-  --text-sm: 15px;
-  --text-base: 16px;
-  --text-md: 18px;
-  --text-lg: 20px;
-  --text-xl: 24px;
-  --text-2xl: 34px;
-  --text-stat: 30px;
-  --text-h1: clamp(32px, 4.5vw, 44px);
-  --text-display: clamp(38px, 5.5vw, 56px);
+  /* Fluid type: laptop sizes up to 1440px wide, growing to the larger size at 1920px.
+     Each middle value is "a + b vw", chosen so it equals the small size at 1440px
+     and the large size at 1920px. Nothing smaller than 14px anywhere. */
+  --text-xs: clamp(14px, 11px + 0.2083vw, 15px);
+  --text-sm: clamp(15px, 12px + 0.2083vw, 16px);
+  --text-base: clamp(16px, 10px + 0.4167vw, 18px);
+  --text-md: clamp(18px, 12px + 0.4167vw, 20px);
+  --text-lg: clamp(20px, 14px + 0.4167vw, 22px);
+  --text-xl: clamp(24px, 12px + 0.8333vw, 28px);
+  --text-2xl: clamp(34px, 16px + 1.25vw, 40px);
+  --text-stat: clamp(30px, 6px + 1.6667vw, 38px);
+  /* Headings also shrink on phones, so they get two ramps: phone to laptop, then laptop to wide */
+  --text-h1: max(clamp(32px, 4.5vw, 44px), clamp(32px, 20px + 1.6667vw, 52px));
+  --text-display: max(clamp(38px, 5.5vw, 56px), clamp(38px, 32px + 1.6667vw, 64px));
   --leading-tight: 1.15;
   --leading-normal: 1.55;
   --tracking-eyebrow: 0.1em;
@@ -82,7 +85,11 @@
   --button-height: 46px;
 
   /* ---- layout ---- */
-  --content-width: 1264px;  /* 1200px of content plus the 32px gutters */
+  /* Width of the content plus the 32px gutters on each side.
+     Reading pages (item detail, reservations, login) use 1200px of content;
+     dashboard and table pages add class="wide" to <body> and get 1440px. */
+  --content-width: 1264px;
+  --content-width-wide: 1504px;
   --gutter: 16px;
 
   /* ---- motion ---- */

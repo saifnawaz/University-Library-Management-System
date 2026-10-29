@@ -70,6 +70,7 @@ Loan due date = the shorter of the member's loan period and the item's limit; th
 - **Recommender**: holds a list of RecommendationStrategy objects and combines their results
 - **RecommendationStrategy** (abstract): ContentBasedStrategy (TF-IDF), CollaborativeStrategy (people who borrowed X also borrowed Y)
 - **ChatAssistant**: private `_system_prompt`, a TopicGuard, an LLM client; ask(member, question), private `_build_context()` that pulls real data from Library and Recommender
+- **StaffAssistant** (subclass of ChatAssistant): the librarian's assistant; overrides the system prompt and `_build_context()` with staff data (overdue loans, members, waitlists, reports). Its panel already sits, switched off, at the bottom of the staff overview.
 - **TopicGuard** (abstract): LLMTopicGuard, KeywordTopicGuard
 
 ## Error handling (Phase 6)

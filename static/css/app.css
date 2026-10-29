@@ -69,6 +69,8 @@ a:hover { color: var(--color-accent-ink); }
   padding-left: var(--gutter);
   padding-right: var(--gutter);
 }
+/* Dashboard and table pages: wider content (the nav bar widens with it) */
+body.wide { --content-width: var(--content-width-wide); }
 
 main.page {
   display: flex;
@@ -102,6 +104,20 @@ main.page > :empty { display: none; }  /* empty slots (notices, forms) take no g
   grid-template-columns: repeat(auto-fit, minmax(min(100%, 380px), 1fr));
   gap: var(--space-section) var(--space-8);
 }
+
+/* Staff overview: Quick issue only as wide as its form; the overdue table takes the rest */
+.desk-columns {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: var(--space-section) var(--space-8);
+  align-items: start;
+}
+@media (min-width: 960px) {
+  .desk-columns { grid-template-columns: max-content minmax(0, 1fr); }
+}
+/* Issue and Return share one row; the result message wraps inside the form instead of widening it */
+.desk-columns .panel .row { flex-wrap: nowrap; }
+.desk-columns .desk-result { contain: inline-size; }
 
 .section { display: flex; flex-direction: column; gap: var(--space-5); }
 .section .section { gap: var(--space-4); }
@@ -259,7 +275,7 @@ main.page > :empty { display: none; }  /* empty slots (notices, forms) take no g
 }
 
 .btn-block { width: 100%; }
-.btn-lg { min-height: 50px; font-size: 16px; }
+.btn-lg { min-height: 50px; font-size: var(--text-base); }
 .btn-icon { min-height: 36px; width: 36px; padding: 0; }
 .btn-icon svg { width: 18px; height: 18px; }
 .btn-small { min-height: 36px; padding: 0 var(--space-3); }

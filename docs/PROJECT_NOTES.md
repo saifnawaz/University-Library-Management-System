@@ -430,9 +430,15 @@ One section per phase, added as each phase is finished.
 - **OOP concept:** extending the base exception once gives every subclass the new field (inheritance).
 
 ### 3. Calmer layout
-- **Sizes:** content up to 1200px wide, body text 16px, nothing under 14px (a Playwright check measures every text element on every page), 48–64px between sections (`--space-section`).
+- **Sizes:** 48–64px between sections (`--space-section`), nothing under 14px (a Playwright check measures every text element on every page). Widths and type sizes were changed later; see section 4.
 - **Fewer boxes:** list rows, rules, info panels, tables, empty states and notices have no borders. They use whitespace and thin dividers. Only forms you act on (Quick issue, Add an item, Issue to member) keep a box.
 - **Fewer things per screen:**
   - **My loans** has three parts: On your desk; one Fines section (two figures, the pay form, the rules as one muted line); History.
   - **Dashboard:** the stat strip hides zero values, and "Ready to borrow" only shows items the member can actually borrow. It disappears while borrowing is paused.
 - **Tables:** rows have 18px padding and dates never wrap. On phones, each row turns into "Label: value" lines. `h()` copies the column headers onto the cells (`labelledTable()`), so nothing scrolls sideways.
+
+### 4. Wide screens and the staff assistant spot
+- **Two content widths** (`tokens.css`): reading pages (item detail, reservations, login) stay at 1200px. Dashboard and table pages (dashboard, my loans, catalog, staff overview, issue & return, members, reports) add `class="wide"` to `<body>`, which switches `--content-width` to 1440px. The nav bar uses the same container, so it lines up with the page.
+- **Fluid type with `clamp()`:** every `--text-*` token is `clamp(small, a + b·vw, large)`. It stays at the laptop size up to 1440px wide and grows to the large size at 1920px: body 16 → 18px, stat numbers 30 → 38px, h1 44 → 52px. The smallest size is 14 → 15px, so nothing goes under 14px. Headings also shrink on phones, so they use `max()` of two ramps.
+- **Staff overview:** Quick issue and the overdue table sit in a `.desk-columns` grid (`max-content` + `1fr`). Quick issue is only as wide as its form and the table gets the rest of the width. The result message uses `contain: inline-size`, so a long message wraps instead of widening the form.
+- **Staff assistant panel:** the staff overview ends with a dark "Staff assistant" panel, switched off and marked "Coming soon", the same as "Ask the librarian" on the member dashboard. Both are built by one helper, `assistantPanel()` in `ui.js`. In Phase 9 the staff one will be backed by **`StaffAssistant`, a subclass of `ChatAssistant`**. It inherits `ask()`, overrides `_system_prompt` and `_build_context()` with staff data (overdue loans, members, waitlists, reports), and only librarians can use it. That is inheritance plus polymorphism, the same way `Student`/`Faculty` override `Member`.

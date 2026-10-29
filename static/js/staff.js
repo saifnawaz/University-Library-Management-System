@@ -1,10 +1,11 @@
-// Librarian overview: today's numbers, quick issue/return, overdue loans, most borrowed.
+// Librarian overview: today's numbers, quick issue/return, overdue loans, most borrowed,
+// and a spot for the staff assistant (switched off until Phase 9).
 
 import { api, ApiError } from "./api.js";
 import { overdueTable, shelfChart } from "./staff-common.js";
 import {
   h, boot, startPage, stat, busy, toast, toastError, formatDate, formatMoney, todayLong,
-  loadingState, errorState,
+  assistantPanel, loadingState, errorState,
 } from "./ui.js";
 
 const main = document.getElementById("main");
@@ -14,7 +15,7 @@ function quickDesk(onChange) {
     autocomplete: "off", autocapitalize: "none" });
   const item = h("input", { class: "input input-bright", id: "q-item", placeholder: "Scan or type",
     autocomplete: "off", autocapitalize: "none" });
-  const result = h("p", { class: "small", role: "status" });
+  const result = h("p", { class: "small desk-result", role: "status" });
   const issue = h("button", { class: "btn btn-primary", type: "submit", style: { flex: "1 1 140px" } }, "Issue");
   const giveBack = h("button", { class: "btn btn-quiet", type: "button", style: { flex: "1 1 140px" } }, "Return");
 
@@ -80,14 +81,19 @@ async function load() {
         stat(formatMoney(stats.current_fines), "Current fines, payable now"),
         stat(formatMoney(stats.total_fines), "Total fines, with overdue items"),
         stat(String(stats.reservations), "Reservations waiting")),
-      h("div", { class: "columns" },
+      h("div", { class: "desk-columns" },
         deskPanel,
         h("section", { class: "section" },
           h("div", { class: "section-head" }, h("h2", {}, "Overdue"), h("a", { href: "/staff/reports" }, "See all")),
           overdueTable(overdue, { limit: 5 }))),
       h("section", { class: "section" },
         h("h2", {}, `Most borrowed, last ${stats.recent_days} days`),
-        shelfChart(stats.most_borrowed_recent.slice(0, 4))));
+        shelfChart(stats.most_borrowed_recent.slice(0, 4))),
+      assistantPanel({
+        title: "Staff assistant",
+        placeholder: "Which members have overdue theses?",
+        comingSoon: "ask about overdue loans, member accounts, waitlists and borrowing trends.",
+      }));
   } catch (error) {
     main.replaceChildren(errorState(error, load));
   }
