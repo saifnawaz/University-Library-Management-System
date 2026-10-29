@@ -507,10 +507,7 @@ From the project root, with the venv:
 
 ### Decisions
 - **Picking rules in Python, not JS:** the old dashboard chose its picks in JavaScript (borrowable items, theses first for Faculty). That was a library rule in JS, so it was removed. JS now only draws what the API returns.
-Phase 10: polish, then the README. This is the final phase, so do a
-full check at the end: all smoke tests, every page in the browser
-(light and dark, desktop and phone width) for every role, and one
-real Gemini call for each assistant.- **Still suggest items with no free copy:** a good match is still worth reading. The tile says "Join waitlist" instead of "Borrow".
+- **Still suggest items with no free copy:** a good match is still worth reading. The tile says "Join waitlist" instead of "Borrow".
 - **Fresh TF-IDF on each request:** the catalog is small (tens of items), so this takes milliseconds and always reflects new items. A big catalog would cache the vectors.
 - **Seed data:** older returned loans (fac01 and stu02) give overlapping histories, so stu01 sees "Members who borrowed..." reasons. New student `stu03` (Zainab Raza, `student123`) has no loans, so she sees the popular fallback.
 
