@@ -52,6 +52,18 @@ Item rules: reference books are read in the library only, e-books have unlimited
 
 `docs/PROJECT_NOTES.md` explains every class and decision in more detail.
 
+## UML diagrams
+
+Class diagrams for the whole project, split into six parts (users and items, library core, storage, recommendations, AI assistants, exceptions): see [docs/UML.md](docs/UML.md).
+
+
+## Live demo
+
+Try it here: [saifnawaz.pythonanywhere.com](https://saifnawaz.pythonanywhere.com)
+
+Use the "Try a demo account" buttons on the login page to sign in as a student, faculty member or librarian. No sign-up needed.
+
+
 ## How to run
 
 From the project root on Windows (on macOS or Linux, use `.venv/bin/python` instead of `.venv\Scripts\python`):
